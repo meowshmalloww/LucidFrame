@@ -1,4 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <rect width="100" height="100" rx="20" fill="#0a0a0a"/>
-  <text x="50" y="70" font-size="60" text-anchor="middle" fill="#e94560">L</text>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#6c5ce7"/>
+      <stop offset="100%" stop-color="#00d4aa"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="100" height="100" rx="22" fill="#07070b"/>
+  <g filter="url(#glow)" transform="translate(50 50)">
+    <path d="M0 -28 L24 -14 L24 14 L0 28 L-24 14 L-24 -14 Z" fill="none" stroke="url(#g)" stroke-width="2.5" stroke-linejoin="round"/>
+    <path d="M0 -28 L0 0 L24 14 L0 0 L-24 14 Z" fill="url(#g)" opacity="0.15"/>
+    <path d="M0 -16 L8 -8 L0 0 L-8 -8 Z" fill="url(#g)" opacity="0.8"/>
+    <circle cx="0" cy="-2" r="2" fill="#00d4aa"/>
+  </g>
 </svg>

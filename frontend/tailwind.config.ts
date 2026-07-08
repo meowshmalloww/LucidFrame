@@ -9,11 +9,12 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        void: "#0a0a0a",
-        panel: "#1a1a2e",
-        accent: "#e94560",
-        secondary: "#0f3460",
-        success: "#16c79a",
+        void: "#07070b",
+        panel: "#111118",
+        "panel-light": "#1a1a26",
+        accent: "#6c5ce7",
+        secondary: "#2d2d3f",
+        success: "#00d4aa",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
@@ -22,16 +23,26 @@ const config: Config = {
       animation: {
         "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
         "glow": "glow 2s ease-in-out infinite alternate",
-        "fade-in": "fadeIn 0.5s ease-in",
+        "fade-in": "fadeIn 0.4s ease-out",
+        "subtle-pulse": "subtlePulse 2s ease-in-out infinite",
+        "slide-up": "slideUp 0.4s ease-out",
       },
       keyframes: {
         glow: {
-          "0%": { boxShadow: "0 0 5px rgba(233, 69, 96, 0.3)" },
-          "100%": { boxShadow: "0 0 20px rgba(233, 69, 96, 0.6)" },
+          "0%": { boxShadow: "0 0 5px rgba(108, 92, 231, 0.3)" },
+          "100%": { boxShadow: "0 0 20px rgba(108, 92, 231, 0.5)" },
         },
         fadeIn: {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },
+        },
+        slideUp: {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        subtlePulse: {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.6" },
         },
       },
     },

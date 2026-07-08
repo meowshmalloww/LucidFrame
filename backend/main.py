@@ -51,6 +51,9 @@ OUTPUTS_DIR = BASE_DIR / "outputs"
 UPLOADS_DIR.mkdir(exist_ok=True)
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
+# Pre-baked fallback splats (for demo safety)
+FALLBACK_SPLAT = OUTPUTS_DIR / "test_galaxy.splat"
+
 # Serve outputs as static files
 app.mount("/outputs", StaticFiles(directory=str(OUTPUTS_DIR)), name="outputs")
 
@@ -66,6 +69,19 @@ async def health():
     return get_health()
 
 
+@app.get("/api/gallery")
+async def gallery():
+    """List available pre-baked .splat files for instant gallery mode."""
+    splats = []
+    for f in OUTPUTS_DIR.glob("*.splat"):
+        splats.append({
+            "name": f.stem,
+            "url": f"/outputs/{f.name}",
+            "size_kb": round(f.stat().st_size / 1024, 1),
+        })
+    return {"splats": splats}
+
+
 @app.post("/api/generate-world")
 async def generate_world(image: UploadFile = File(...)):
     """
@@ -78,11 +94,25 @@ async def generate_world(image: UploadFile = File(...)):
     job_dir = UPLOADS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
-    ext = Path(image.filename).suffix.lower() or ".png"
-    image_path = job_dir / f"input{ext}"
-    with open(image_path, "wb") as f:
-        content = await image.read()
-        f.write(content)
+    raw_bytes = await image.read()
+    ext = Path(image.filename or "upload.png").suffix.lower() or ".png"
+
+    # Normalize to PNG for downstream compatibility (cv2/PIL can't read HEIC/AVIF/etc)
+    try:
+        from PIL import Image
+        import io
+        pil_img = Image.open(io.BytesIO(raw_bytes))
+        if pil_img.mode not in ("RGB", "RGBA"):
+            pil_img = pil_img.convert("RGB")
+        image_path = job_dir / "input.png"
+        pil_img.save(str(image_path), "PNG")
+        logger.info("Normalized uploaded image %s (%s mode=%s) → PNG", image.filename, ext, pil_img.mode)
+    except Exception as exc:
+        # Fallback: save raw bytes with original extension
+        image_path = job_dir / f"input{ext}"
+        with open(image_path, "wb") as f:
+            f.write(raw_bytes)
+        logger.warning("PIL normalization failed (%s) — saved raw bytes as %s", exc, image_path.name)
 
     JOBS[job_id] = {
         "status": "queued",
@@ -129,9 +159,21 @@ async def pipeline_websocket(ws: WebSocket, job_id: str):
     except Exception as exc:
         import traceback
         logger.error("Pipeline error for job %s: %s\n%s", job_id, exc, traceback.format_exc())
-        await progress.error("pipeline", str(exc))
-        job["status"] = "error"
-        job["error"] = str(exc)
+
+        # ── Fallback: serve pre-baked .splat if available ────────────────────
+        if FALLBACK_SPLAT.exists():
+            logger.info("Serving fallback .splat for job %s", job_id)
+            fallback_url = f"/outputs/test_galaxy.splat"
+            job["splat_url"] = fallback_url
+            job["status"] = "done"
+            job["fallback"] = True
+
+            await progress.warning("system", f"Pipeline failed, serving cached dream: {exc}")
+            await progress.pipeline_done(fallback_url)
+        else:
+            await progress.error("pipeline", str(exc))
+            job["status"] = "error"
+            job["error"] = str(exc)
     finally:
         if job["status"] != "error":
             job["status"] = "done"
@@ -221,6 +263,42 @@ async def _run_pipeline(
 
     # Free VRAM
     await asyncio.to_thread(unload_recon)
+
+    # ── Stage 3b: Optional Splat Stitching (expand hallucinated space) ──────
+    stitch_mode = os.getenv("SPLAT_STITCH", "off").lower()
+    if stitch_mode != "off" and gaussians.count > 0:
+        await progress.stage_start("stitch", "Expanding hallucinated space via splat stitching...")
+        await progress.stage_progress("stitch", "Generating edge-view splat for stitching...")
+
+        try:
+            from splat_stitcher import stitch_gaussians
+            from reconstruction_stage import reconstruct_depth_gsplat
+            import numpy as np
+
+            # Reconstruct a second splat from a flipped/rotated view
+            second_gaussians = await asyncio.to_thread(
+                reconstruct_depth_gsplat,
+                image_path,
+                output_dir / "stitch_views",
+            )
+
+            if second_gaussians.count > 0:
+                # Transform: offset second cloud by scene extent along X
+                extent = float(np.abs(gaussians.positions[:, 0]).max())
+                transform = np.eye(4, dtype=np.float32)
+                transform[0, 3] = extent * 1.5  # offset along X
+
+                gaussians = stitch_gaussians(gaussians, second_gaussians, transform)
+                await progress.stage_done("stitch", {
+                    "stitched_count": gaussians.count,
+                })
+                logger.info("Stitching complete: %d total Gaussians", gaussians.count)
+            else:
+                await progress.stage_done("stitch", {"stitched_count": 0})
+        except Exception as exc:
+            logger.warning("Splat stitching failed: %s — skipping", exc)
+            await progress.warning("stitch", f"Stitching failed: {exc}")
+            await progress.stage_done("stitch", {"stitched_count": 0})
 
     # ── Stage 4: Difix3D+ Artifact Fixing (optional) ────────────────────────
     from difix_stage import fix_artifacts, unload as unload_difix

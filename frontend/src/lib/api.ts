@@ -97,6 +97,7 @@ export type PipelineStage =
   | "llm"
   | "multiview"
   | "reconstruction"
+  | "stitch"
   | "difix"
   | "compile"
   | "system"
@@ -119,6 +120,7 @@ export const STAGE_ORDER: PipelineStage[] = [
   "llm",
   "multiview",
   "reconstruction",
+  "stitch",
   "difix",
   "compile",
 ];
@@ -128,6 +130,7 @@ export const STAGE_LABELS: Record<PipelineStage, string> = {
   llm: "Dream Narrative",
   multiview: "Multi-View Synthesis",
   reconstruction: "3D Reconstruction",
+  stitch: "Splat Stitching",
   difix: "Artifact Fix",
   compile: "Compile .splat",
   system: "System",
@@ -135,3 +138,20 @@ export const STAGE_LABELS: Record<PipelineStage, string> = {
 };
 
 export const SPLAT_URL_BASE = API_BASE;
+
+export interface GallerySplat {
+  name: string;
+  url: string;
+  size_kb: number;
+}
+
+export async function getGallery(): Promise<GallerySplat[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/gallery`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.splats || [];
+  } catch {
+    return [];
+  }
+}

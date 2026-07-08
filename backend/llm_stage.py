@@ -90,6 +90,78 @@ async def generate_dream_prompt_anthropic(analysis: dict[str, Any], api_key: str
     return prompt
 
 
+async def generate_dream_prompt_gemini(analysis: dict[str, Any], api_key: str) -> str:
+    """Call Gemini to generate dreamlike narrative from VLM analysis."""
+    import google.generativeai as genai
+    import json
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+    analysis_text = json.dumps(analysis, indent=2)
+
+    logger.info("%s Calling Gemini for dream narrative...", TAG)
+    response = await model.generate_content_async(
+        f"{LLM_SYSTEM_PROMPT}\n\nVisual analysis:\n{analysis_text}\n\nGenerate the Master Scene Prompt:"
+    )
+
+    prompt = response.text.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
+async def generate_dream_prompt_groq(analysis: dict[str, Any], api_key: str) -> str:
+    """Call Groq to generate dreamlike narrative from VLM analysis."""
+    from openai import AsyncOpenAI
+    import json
+
+    client = AsyncOpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+    analysis_text = json.dumps(analysis, indent=2)
+    model = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+
+    logger.info("%s Calling Groq for dream narrative (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Visual analysis:\n{analysis_text}\n\nGenerate the Master Scene Prompt:"},
+        ],
+        max_tokens=300,
+        temperature=0.9,
+    )
+
+    prompt = response.choices[0].message.content.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
+async def generate_dream_prompt_openrouter(analysis: dict[str, Any], api_key: str) -> str:
+    """Call OpenRouter to generate dreamlike narrative from VLM analysis."""
+    from openai import AsyncOpenAI
+    import json
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    analysis_text = json.dumps(analysis, indent=2)
+    model = os.getenv("LLM_MODEL", "google/gemini-2.0-flash-exp:free")
+
+    logger.info("%s Calling OpenRouter for dream narrative (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": f"Visual analysis:\n{analysis_text}\n\nGenerate the Master Scene Prompt:"},
+        ],
+        max_tokens=300,
+        temperature=0.9,
+    )
+
+    prompt = response.choices[0].message.content.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
 async def generate_dream_prompt(analysis: dict[str, Any]) -> str:
     """
     Main entry point: generate a dreamlike Master Scene Prompt from VLM analysis.
@@ -99,20 +171,59 @@ async def generate_dream_prompt(analysis: dict[str, Any]) -> str:
 
     Returns:
         Master Scene Prompt string (2-3 sentences of dreamlike scene description).
+    Falls back to a mock prompt if no API key is configured.
     """
     provider = LLM_PROVIDER
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not set in environment")
+            logger.warning("%s OPENAI_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
         return await generate_dream_prompt_openai(analysis, api_key)
 
     elif provider == "anthropic":
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not set in environment")
+            logger.warning("%s ANTHROPIC_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
         return await generate_dream_prompt_anthropic(analysis, api_key)
+
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            logger.warning("%s GEMINI_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_gemini(analysis, api_key)
+
+    elif provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY", "")
+        if not api_key:
+            logger.warning("%s GROQ_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_groq(analysis, api_key)
+
+    elif provider == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            logger.warning("%s OPENROUTER_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_openrouter(analysis, api_key)
 
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
+
+
+def _mock_dream_prompt(analysis: dict[str, Any]) -> str:
+    """Generate a mock dream prompt from analysis keywords for offline testing."""
+    mood = analysis.get("mood", "ethereal")
+    atmosphere = analysis.get("atmosphere", "dreamy")
+    lighting = analysis.get("lighting", "soft diffused")
+    style = analysis.get("style", "photograph")
+    return (
+        f"A {mood} dreamscape unfolds beyond the frame, bathed in {lighting} that "
+        f"filters through an {atmosphere} space. The {style} world extends into "
+        f"depths of impossible geometry, where every surface whispers of memories "
+        f"not yet lived. Shadows dance with light as the boundary between real and "
+        f"dreamed dissolves into pure sensation."
+    )

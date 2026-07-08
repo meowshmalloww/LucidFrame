@@ -3,11 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --void: #0a0a0a;
-  --panel: #1a1a2e;
-  --accent: #e94560;
-  --secondary: #0f3460;
-  --success: #16c79a;
+  --void: #07070b;
+  --panel: #111118;
+  --panel-light: #1a1a26;
+  --accent: #6c5ce7;
+  --accent-glow: rgba(108, 92, 231, 0.4);
+  --secondary: #2d2d3f;
+  --success: #00d4aa;
+  --success-glow: rgba(0, 212, 170, 0.3);
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888a0;
+  --text-muted: #4a4a5e;
+  --border: rgba(255, 255, 255, 0.06);
+  --border-active: rgba(108, 92, 231, 0.4);
 }
 
 * {
@@ -19,46 +27,99 @@
 html,
 body {
   background: var(--void);
-  color: #e0e0e0;
+  color: var(--text-primary);
   font-family: "Inter", system-ui, sans-serif;
   overflow: hidden;
   height: 100vh;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* Custom scrollbar for DreamLog */
-.dream-log::-webkit-scrollbar {
-  width: 6px;
+/* Subtle ambient background gradient */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(108, 92, 231, 0.08), transparent 50%),
+    radial-gradient(ellipse at 80% 100%, rgba(0, 212, 170, 0.05), transparent 50%);
+  pointer-events: none;
+  z-index: 0;
 }
-.dream-log::-webkit-scrollbar-track {
-  background: var(--void);
+
+/* Custom scrollbar */
+.dream-log::-webkit-scrollbar,
+.thin-scroll::-webkit-scrollbar {
+  width: 4px;
 }
-.dream-log::-webkit-scrollbar-thumb {
+.dream-log::-webkit-scrollbar-track,
+.thin-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.dream-log::-webkit-scrollbar-thumb,
+.thin-scroll::-webkit-scrollbar-thumb {
   background: var(--secondary);
-  border-radius: 3px;
+  border-radius: 2px;
 }
-.dream-log::-webkit-scrollbar-thumb:hover {
+.dream-log::-webkit-scrollbar-thumb:hover,
+.thin-scroll::-webkit-scrollbar-thumb:hover {
   background: var(--accent);
 }
 
-/* Glow effect for drop zone */
+/* Drop zone glow */
 .dropzone-glow {
-  box-shadow: 0 0 30px rgba(233, 69, 96, 0.2), inset 0 0 30px rgba(233, 69, 96, 0.05);
-  transition: all 0.3s ease;
+  box-shadow:
+    0 0 40px rgba(108, 92, 231, 0.12),
+    inset 0 0 40px rgba(108, 92, 231, 0.03);
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .dropzone-glow:hover {
-  box-shadow: 0 0 50px rgba(233, 69, 96, 0.4), inset 0 0 50px rgba(233, 69, 96, 0.1);
+  box-shadow:
+    0 0 60px rgba(108, 92, 231, 0.25),
+    inset 0 0 60px rgba(108, 92, 231, 0.06);
 }
 
 /* Stage progress segments */
 .stage-segment {
-  transition: all 0.4s ease;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
 .stage-segment.active {
-  box-shadow: 0 0 10px currentColor;
+  box-shadow: 0 0 12px var(--accent-glow);
 }
 .stage-segment.done {
   opacity: 1;
 }
 .stage-segment.pending {
-  opacity: 0.3;
+  opacity: 0.25;
+}
+
+/* Glass panel */
+.glass {
+  background: rgba(17, 17, 24, 0.6);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border);
+}
+
+/* Subtle pulse for active elements */
+@keyframes subtle-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.animate-subtle-pulse {
+  animation: subtle-pulse 2s ease-in-out infinite;
+}
+
+/* Shimmer for loading */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(108, 92, 231, 0.15) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s linear infinite;
 }

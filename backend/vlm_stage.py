@@ -139,25 +139,181 @@ async def analyze_image_anthropic(image_path: Path, api_key: str) -> dict[str, A
     return analysis
 
 
+async def analyze_image_gemini(image_path: Path, api_key: str) -> dict[str, Any]:
+    """Call Gemini Vision API for image analysis."""
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel("gemini-2.0-flash")
+
+    img = Path(image_path).read_bytes()
+    ext = image_path.suffix.lower().lstrip(".")
+    if ext == "jpg":
+        ext = "jpeg"
+
+    logger.info("%s Calling Gemini Vision API...", TAG)
+    response = await model.generate_content_async(
+        [VLM_ANALYSIS_PROMPT, {"mime_type": f"image/{ext}", "data": img}]
+    )
+
+    content = response.text
+    logger.info("%s VLM response received (%d chars)", TAG, len(content))
+
+    try:
+        analysis = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            analysis = json.loads(content[start:end])
+        else:
+            analysis = {"raw_response": content}
+    return analysis
+
+
+async def analyze_image_groq(image_path: Path, api_key: str) -> dict[str, Any]:
+    """Call Groq Vision API (Llama 3.2 Vision) for image analysis."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(api_key=api_key, base_url="https://api.groq.com/openai/v1")
+    image_b64 = _encode_image_b64(image_path)
+
+    logger.info("%s Calling Groq Vision API (Llama 3.2 90B Vision)...", TAG)
+    response = await client.chat.completions.create(
+        model="meta-llama/llama-3.2-90b-vision-preview",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_b64}},
+                ],
+            }
+        ],
+        max_tokens=1000,
+        temperature=0.7,
+    )
+
+    content = response.choices[0].message.content
+    logger.info("%s VLM response received (%d chars)", TAG, len(content))
+
+    try:
+        analysis = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            analysis = json.loads(content[start:end])
+        else:
+            analysis = {"raw_response": content}
+    return analysis
+
+
+async def analyze_image_openrouter(image_path: Path, api_key: str) -> dict[str, Any]:
+    """Call OpenRouter Vision API for image analysis.
+
+    OpenRouter routes to many models. Default uses google/gemini-2.0-flash-exp:free
+    which has excellent vision and a free tier.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+    image_b64 = _encode_image_b64(image_path)
+    model = os.getenv("VLM_MODEL", "google/gemini-2.0-flash-exp:free")
+
+    logger.info("%s Calling OpenRouter Vision API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_b64}},
+                ],
+            }
+        ],
+        max_tokens=1000,
+        temperature=0.7,
+    )
+
+    content = response.choices[0].message.content
+    logger.info("%s VLM response received (%d chars)", TAG, len(content))
+
+    try:
+        analysis = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            analysis = json.loads(content[start:end])
+        else:
+            analysis = {"raw_response": content}
+    return analysis
+
+
 async def analyze_image(image_path: Path) -> dict[str, Any]:
     """
     Main entry point: analyze an image using the configured VLM provider.
 
-    Returns structured visual analysis dict.
+    Supported providers: openai, anthropic, gemini, groq, openrouter
+    Falls back to a mock analysis if no API key is configured.
     """
     provider = VLM_PROVIDER
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "")
         if not api_key:
-            raise ValueError("OPENAI_API_KEY not set in environment")
+            logger.warning("%s OPENAI_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
         return await analyze_image_openai(image_path, api_key)
 
     elif provider == "anthropic":
         api_key = os.getenv("ANTHROPIC_API_KEY", "")
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not set in environment")
+            logger.warning("%s ANTHROPIC_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
         return await analyze_image_anthropic(image_path, api_key)
+
+    elif provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        if not api_key:
+            logger.warning("%s GEMINI_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
+        return await analyze_image_gemini(image_path, api_key)
+
+    elif provider == "groq":
+        api_key = os.getenv("GROQ_API_KEY", "")
+        if not api_key:
+            logger.warning("%s GROQ_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
+        return await analyze_image_groq(image_path, api_key)
+
+    elif provider == "openrouter":
+        api_key = os.getenv("OPENROUTER_API_KEY", "")
+        if not api_key:
+            logger.warning("%s OPENROUTER_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
+        return await analyze_image_openrouter(image_path, api_key)
 
     else:
         raise ValueError(f"Unknown VLM provider: {provider}")
+
+
+def _mock_analysis() -> dict[str, Any]:
+    """Return a generic creative analysis for offline/local testing."""
+    return {
+        "era": "timeless",
+        "style": "photograph",
+        "mood": "mysterious",
+        "lighting": "soft diffused",
+        "architecture": "none",
+        "color_palette": ["#2a2a3e", "#6c5ce7", "#0d1117", "#e8e8f0"],
+        "atmosphere": "dreamy and ethereal",
+        "visible_content": "A captivating scene with rich textures and depth.",
+        "textures": ["smooth", "rough", "reflective"],
+        "composition": "centered subject with atmospheric background",
+    }

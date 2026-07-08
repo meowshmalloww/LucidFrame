@@ -11,7 +11,6 @@ Each Gaussian occupies 32 bytes:
 from __future__ import annotations
 
 import logging
-import struct
 from pathlib import Path
 
 import numpy as np
@@ -69,17 +68,20 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
     # Combine RGBA
     rgba = np.column_stack([colors, opacities.flatten()])  # (N, 4) uint8
 
-    # Write binary
+    # Build binary buffer via structured array (vectorized — no Python loop)
+    # Each Gaussian: 32 bytes = 6 float32 (pos + scale) + 4 uint8 (rgba) + 4 uint8 (rot)
+    dtype = np.dtype([
+        ('pos_scale', np.float32, 6),   # 24 bytes
+        ('rgba', np.uint8, 4),           # 4 bytes
+        ('rot', np.uint8, 4),            # 4 bytes
+    ])
+    buf = np.empty(n, dtype=dtype)
+    buf['pos_scale'] = np.column_stack([positions, scales])  # (N, 6)
+    buf['rgba'] = rgba
+    buf['rot'] = rotations_u8
+
     with open(output_path, "wb") as f:
-        for i in range(n):
-            # Position: 12 bytes (3 × float32)
-            f.write(struct.pack("fff", positions[i, 0], positions[i, 1], positions[i, 2]))
-            # Scale: 12 bytes (3 × float32)
-            f.write(struct.pack("fff", scales[i, 0], scales[i, 1], scales[i, 2]))
-            # Color: 4 bytes (4 × uint8)
-            f.write(struct.pack("BBBB", rgba[i, 0], rgba[i, 1], rgba[i, 2], rgba[i, 3]))
-            # Rotation: 4 bytes (4 × uint8)
-            f.write(struct.pack("BBBB", rotations_u8[i, 0], rotations_u8[i, 1], rotations_u8[i, 2], rotations_u8[i, 3]))
+        f.write(buf.tobytes())
 
     file_size = output_path.stat().st_size
     logger.info("%s Compiled %d Gaussians → %s (%.2f MB)", TAG, n, output_path, file_size / 1e6)

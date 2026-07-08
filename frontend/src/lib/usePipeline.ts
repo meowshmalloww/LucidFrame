@@ -42,6 +42,7 @@ const INITIAL_STATE: PipelineState = {
     llm: "pending",
     multiview: "pending",
     reconstruction: "pending",
+    stitch: "pending",
     difix: "pending",
     compile: "pending",
   },
@@ -159,6 +160,26 @@ export function usePipeline() {
     [handleEvent],
   );
 
+  const loadSplat = useCallback(
+    (splatUrl: string) => {
+      setState({
+        ...INITIAL_STATE,
+        isDone: true,
+        splatUrl,
+        stages: {
+          vlm: "done",
+          llm: "done",
+          multiview: "done",
+          reconstruction: "done",
+          stitch: "done",
+          difix: "done",
+          compile: "done",
+        },
+      });
+    },
+    [],
+  );
+
   const reset = useCallback(() => {
     if (wsRef.current) {
       wsRef.current.close();
@@ -167,5 +188,5 @@ export function usePipeline() {
     setState(INITIAL_STATE);
   }, []);
 
-  return { state, start, reset };
+  return { state, start, reset, loadSplat };
 }

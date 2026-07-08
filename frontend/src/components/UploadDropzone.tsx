@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { MoonIcon, ImageIcon } from "./Icons";
 
 interface UploadDropzoneProps {
   onImageSelected: (image: File) => void;
@@ -45,10 +46,10 @@ export default function UploadDropzone({ onImageSelected, disabled }: UploadDrop
     <div
       className={`
         relative flex flex-col items-center justify-center
-        min-h-[400px] rounded-2xl border-2 border-dashed
+        min-h-[420px] rounded-2xl border-2 border-dashed
         transition-all duration-300 cursor-pointer
-        ${isDragging ? "border-accent bg-accent/5 scale-[1.02]" : "border-secondary/50 hover:border-accent/50"}
-        ${disabled ? "opacity-50 pointer-events-none" : ""}
+        ${isDragging ? "border-accent bg-accent/5 scale-[1.01]" : "border-secondary/40 hover:border-accent/40"}
+        ${disabled ? "opacity-40 pointer-events-none" : ""}
         dropzone-glow
       `}
       onDragOver={(e) => {
@@ -62,7 +63,7 @@ export default function UploadDropzone({ onImageSelected, disabled }: UploadDrop
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,.heic,.heif,.avif,.webp,.tiff,.tif,.bmp,.gif,.svg"
         className="hidden"
         onChange={handleChange}
       />
@@ -73,21 +74,30 @@ export default function UploadDropzone({ onImageSelected, disabled }: UploadDrop
           <img
             src={preview}
             alt="Uploaded preview"
-            className="max-h-[300px] rounded-lg shadow-2xl object-contain"
+            className="max-h-[300px] rounded-xl object-contain"
+            style={{ filter: "drop-shadow(0 8px 24px rgba(0,0,0,0.5))" }}
           />
-          <p className="text-sm text-gray-400">Click to change image</p>
+          <div className="flex items-center gap-2 text-sm text-gray-500">
+            <ImageIcon size={14} />
+            <span>Click to change image</span>
+          </div>
         </div>
       ) : (
-        <div className="flex flex-col items-center gap-4 p-8 text-center">
-          <div className="text-6xl mb-2 animate-pulse-slow">🌙</div>
-          <h2 className="text-2xl font-light tracking-wide text-gray-300">
-            Drop any image
-          </h2>
-          <p className="text-lg font-light text-accent/80">
-            Step into the dream
-          </p>
-          <p className="text-xs text-gray-500 mt-4 max-w-xs">
-            Photos, paintings, historical artifacts, screenshots — anything visual.
+        <div className="flex flex-col items-center gap-6 p-8 text-center">
+          <div className="relative">
+            <MoonIcon size={56} className="text-accent/40 animate-pulse-slow" />
+            <div className="absolute inset-0 blur-xl bg-accent/10 rounded-full" />
+          </div>
+          <div className="space-y-2">
+            <h2 className="text-2xl font-light tracking-wide text-gray-200">
+              Drop any image
+            </h2>
+            <p className="text-base font-light text-accent/70 tracking-wide">
+              Step into the dream
+            </p>
+          </div>
+          <p className="text-xs text-gray-600 max-w-xs leading-relaxed">
+            Photos, paintings, artifacts, screenshots — anything visual.
             The AI will hallucinate the unseen world around it.
           </p>
         </div>
