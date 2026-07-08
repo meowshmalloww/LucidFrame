@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --void: #0a0a0a;
+  --panel: #1a1a2e;
+  --accent: #e94560;
+  --secondary: #0f3460;
+  --success: #16c79a;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body {
+  background: var(--void);
+  color: #e0e0e0;
+  font-family: "Inter", system-ui, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+}
+
+/* Custom scrollbar for DreamLog */
+.dream-log::-webkit-scrollbar {
+  width: 6px;
+}
+.dream-log::-webkit-scrollbar-track {
+  background: var(--void);
+}
+.dream-log::-webkit-scrollbar-thumb {
+  background: var(--secondary);
+  border-radius: 3px;
+}
+.dream-log::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+
+/* Glow effect for drop zone */
+.dropzone-glow {
+  box-shadow: 0 0 30px rgba(233, 69, 96, 0.2), inset 0 0 30px rgba(233, 69, 96, 0.05);
+  transition: all 0.3s ease;
+}
+.dropzone-glow:hover {
+  box-shadow: 0 0 50px rgba(233, 69, 96, 0.4), inset 0 0 50px rgba(233, 69, 96, 0.1);
+}
+
+/* Stage progress segments */
+.stage-segment {
+  transition: all 0.4s ease;
+}
+.stage-segment.active {
+  box-shadow: 0 0 10px currentColor;
+}
+.stage-segment.done {
+  opacity: 1;
+}
+.stage-segment.pending {
+  opacity: 0.3;
+}
