@@ -3,19 +3,18 @@
 @tailwind utilities;
 
 :root {
-  --void: #07070b;
-  --panel: #111118;
-  --panel-light: #1a1a26;
-  --accent: #6c5ce7;
-  --accent-glow: rgba(108, 92, 231, 0.4);
-  --secondary: #2d2d3f;
-  --success: #00d4aa;
-  --success-glow: rgba(0, 212, 170, 0.3);
-  --text-primary: #e8e8f0;
-  --text-secondary: #8888a0;
-  --text-muted: #4a4a5e;
+  --void: #09090B;
+  --surface: #111113;
+  --elevated: #18181B;
+  --accent: #FFFFFF;
+  --accent-hover: #E4E4E7;
+  --success: #22C55E;
+  --warning: #F59E0B;
+  --danger: #EF4444;
+  --text-primary: #FAFAFA;
+  --text-secondary: #A1A1AA;
+  --text-muted: #71717A;
   --border: rgba(255, 255, 255, 0.06);
-  --border-active: rgba(108, 92, 231, 0.4);
 }
 
 * {
@@ -28,87 +27,53 @@ html,
 body {
   background: var(--void);
   color: var(--text-primary);
-  font-family: "Inter", system-ui, sans-serif;
+  font-family: "Inter", system-ui, -apple-system, sans-serif;
   overflow: hidden;
   height: 100vh;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01";
+  font-variation-settings: "opsz" 32;
 }
 
-/* Subtle ambient background gradient */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background:
-    radial-gradient(ellipse at 20% 0%, rgba(108, 92, 231, 0.08), transparent 50%),
-    radial-gradient(ellipse at 80% 100%, rgba(0, 212, 170, 0.05), transparent 50%);
-  pointer-events: none;
-  z-index: 0;
+/* Scrollbars — subtle, VS Code style */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
 }
 
-/* Custom scrollbar */
-.dream-log::-webkit-scrollbar,
+/* Thin scrollbar variant for panels */
 .thin-scroll::-webkit-scrollbar {
   width: 4px;
 }
-.dream-log::-webkit-scrollbar-track,
-.thin-scroll::-webkit-scrollbar-track {
-  background: transparent;
-}
-.dream-log::-webkit-scrollbar-thumb,
 .thin-scroll::-webkit-scrollbar-thumb {
-  background: var(--secondary);
-  border-radius: 2px;
-}
-.dream-log::-webkit-scrollbar-thumb:hover,
-.thin-scroll::-webkit-scrollbar-thumb:hover {
-  background: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
 }
 
-/* Drop zone glow */
-.dropzone-glow {
-  box-shadow:
-    0 0 40px rgba(108, 92, 231, 0.12),
-    inset 0 0 40px rgba(108, 92, 231, 0.03);
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.dropzone-glow:hover {
-  box-shadow:
-    0 0 60px rgba(108, 92, 231, 0.25),
-    inset 0 0 60px rgba(108, 92, 231, 0.06);
+/* Focus ring — subtle, Apple style */
+*:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
-/* Stage progress segments */
-.stage-segment {
-  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-}
-.stage-segment.active {
-  box-shadow: 0 0 12px var(--accent-glow);
-}
-.stage-segment.done {
-  opacity: 1;
-}
-.stage-segment.pending {
-  opacity: 0.25;
+/* Selection */
+::selection {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
 }
 
-/* Glass panel */
-.glass {
-  background: rgba(17, 17, 24, 0.6);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-}
-
-/* Subtle pulse for active elements */
-@keyframes subtle-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.6; }
-}
-.animate-subtle-pulse {
-  animation: subtle-pulse 2s ease-in-out infinite;
-}
-
-/* Shimmer for loading */
+/* Loading shimmer — minimal */
 @keyframes shimmer {
   0% { background-position: -200% 0; }
   100% { background-position: 200% 0; }
@@ -116,10 +81,32 @@ body::before {
 .shimmer {
   background: linear-gradient(
     90deg,
-    transparent 0%,
-    rgba(108, 92, 231, 0.15) 50%,
-    transparent 100%
+    rgba(255, 255, 255, 0.02) 0%,
+    rgba(255, 255, 255, 0.06) 50%,
+    rgba(255, 255, 255, 0.02) 100%
   );
   background-size: 200% 100%;
   animation: shimmer 2s linear infinite;
+}
+
+/* Progress bar indeterminate */
+.progress-indeterminate {
+  position: relative;
+  overflow: hidden;
+}
+.progress-indeterminate::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 50%,
+    transparent 100%
+  );
+  animation: progress 1.5s ease-in-out infinite;
+}
+@keyframes progress {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
 }

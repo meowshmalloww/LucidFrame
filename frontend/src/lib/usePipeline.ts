@@ -160,6 +160,17 @@ export function usePipeline() {
     [handleEvent],
   );
 
+  const connect = useCallback(
+    (jobId: string) => {
+      setState({ ...INITIAL_STATE, isRunning: true });
+      const ws = createPipelineWebSocket(jobId, handleEvent, () => {
+        setState((prev) => ({ ...prev, isRunning: false }));
+      });
+      wsRef.current = ws;
+    },
+    [handleEvent],
+  );
+
   const loadSplat = useCallback(
     (splatUrl: string) => {
       setState({
@@ -188,5 +199,5 @@ export function usePipeline() {
     setState(INITIAL_STATE);
   }, []);
 
-  return { state, start, reset, loadSplat };
+  return { state, start, connect, reset, loadSplat };
 }

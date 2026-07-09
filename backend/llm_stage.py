@@ -8,6 +8,7 @@ The LLM is the "imagination" — it dreams what's beyond the image.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from typing import Any
@@ -162,6 +163,84 @@ async def generate_dream_prompt_openrouter(analysis: dict[str, Any], api_key: st
     return prompt
 
 
+async def generate_dream_prompt_cerebras(analysis: dict[str, Any], api_key: str) -> str:
+    """Call Cerebras for text generation — ultra-fast, text-only (no vision)."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.cerebras.ai/v1",
+    )
+    model = os.getenv("LLM_MODEL", "llama-3.3-70b")
+
+    logger.info("%s Calling Cerebras LLM API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(analysis, indent=2)},
+        ],
+        max_tokens=300,
+        temperature=0.8,
+    )
+
+    prompt = response.choices[0].message.content.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
+async def generate_dream_prompt_nim(analysis: dict[str, Any], api_key: str) -> str:
+    """Call NVIDIA NIM for text generation."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+    model = os.getenv("LLM_MODEL", "meta/llama-3.1-70b-instruct")
+
+    logger.info("%s Calling NVIDIA NIM LLM API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(analysis, indent=2)},
+        ],
+        max_tokens=300,
+        temperature=0.8,
+    )
+
+    prompt = response.choices[0].message.content.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
+async def generate_dream_prompt_mistral(analysis: dict[str, Any], api_key: str) -> str:
+    """Call Mistral for text generation."""
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.mistral.ai/v1",
+    )
+    model = os.getenv("LLM_MODEL", "mistral-large-latest")
+
+    logger.info("%s Calling Mistral LLM API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": LLM_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(analysis, indent=2)},
+        ],
+        max_tokens=300,
+        temperature=0.8,
+    )
+
+    prompt = response.choices[0].message.content.strip()
+    logger.info("%s Master Scene Prompt generated (%d chars): %s", TAG, len(prompt), prompt[:100])
+    return prompt
+
+
 async def generate_dream_prompt(analysis: dict[str, Any]) -> str:
     """
     Main entry point: generate a dreamlike Master Scene Prompt from VLM analysis.
@@ -209,6 +288,27 @@ async def generate_dream_prompt(analysis: dict[str, Any]) -> str:
             logger.warning("%s OPENROUTER_API_KEY not set — using mock dream prompt", TAG)
             return _mock_dream_prompt(analysis)
         return await generate_dream_prompt_openrouter(analysis, api_key)
+
+    elif provider == "cerebras":
+        api_key = os.getenv("CEREBRAS_API_KEY", "")
+        if not api_key:
+            logger.warning("%s CEREBRAS_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_cerebras(analysis, api_key)
+
+    elif provider == "nim":
+        api_key = os.getenv("NIM_API_KEY", "")
+        if not api_key:
+            logger.warning("%s NIM_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_nim(analysis, api_key)
+
+    elif provider == "mistral":
+        api_key = os.getenv("MISTRAL_API_KEY", "")
+        if not api_key:
+            logger.warning("%s MISTRAL_API_KEY not set — using mock dream prompt", TAG)
+            return _mock_dream_prompt(analysis)
+        return await generate_dream_prompt_mistral(analysis, api_key)
 
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")

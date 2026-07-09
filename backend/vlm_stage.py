@@ -255,6 +255,97 @@ async def analyze_image_openrouter(image_path: Path, api_key: str) -> dict[str, 
     return analysis
 
 
+async def analyze_image_nim(image_path: Path, api_key: str) -> dict[str, Any]:
+    """Call NVIDIA NIM Vision API for image analysis.
+
+    NVIDIA NIM provides OpenAI-compatible endpoints for vision models
+    like meta/llama-3.2-90b-vision-instruct and nvidia/neva-22b.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://integrate.api.nvidia.com/v1",
+    )
+    image_b64 = _encode_image_b64(image_path)
+    model = os.getenv("VLM_MODEL", "meta/llama-3.2-90b-vision-instruct")
+
+    logger.info("%s Calling NVIDIA NIM Vision API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_b64}},
+                ],
+            }
+        ],
+        max_tokens=1000,
+        temperature=0.7,
+    )
+
+    content = response.choices[0].message.content
+    logger.info("%s VLM response received (%d chars)", TAG, len(content))
+
+    try:
+        analysis = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            analysis = json.loads(content[start:end])
+        else:
+            analysis = {"raw_response": content}
+    return analysis
+
+
+async def analyze_image_mistral(image_path: Path, api_key: str) -> dict[str, Any]:
+    """Call Mistral Vision API for image analysis.
+
+    Uses pixtral-12b-2409 model via OpenAI-compatible endpoint.
+    """
+    from openai import AsyncOpenAI
+
+    client = AsyncOpenAI(
+        api_key=api_key,
+        base_url="https://api.mistral.ai/v1",
+    )
+    image_b64 = _encode_image_b64(image_path)
+    model = os.getenv("VLM_MODEL", "pixtral-12b-2409")
+
+    logger.info("%s Calling Mistral Vision API (model=%s)...", TAG, model)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": VLM_ANALYSIS_PROMPT},
+                    {"type": "image_url", "image_url": {"url": image_b64}},
+                ],
+            }
+        ],
+        max_tokens=1000,
+        temperature=0.7,
+    )
+
+    content = response.choices[0].message.content
+    logger.info("%s VLM response received (%d chars)", TAG, len(content))
+
+    try:
+        analysis = json.loads(content)
+    except json.JSONDecodeError:
+        start = content.find("{")
+        end = content.rfind("}") + 1
+        if start >= 0 and end > start:
+            analysis = json.loads(content[start:end])
+        else:
+            analysis = {"raw_response": content}
+    return analysis
+
+
 async def analyze_image(image_path: Path) -> dict[str, Any]:
     """
     Main entry point: analyze an image using the configured VLM provider.
@@ -298,6 +389,24 @@ async def analyze_image(image_path: Path) -> dict[str, Any]:
             logger.warning("%s OPENROUTER_API_KEY not set — using mock analysis", TAG)
             return _mock_analysis()
         return await analyze_image_openrouter(image_path, api_key)
+
+    elif provider == "nim":
+        api_key = os.getenv("NIM_API_KEY", "")
+        if not api_key:
+            logger.warning("%s NIM_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
+        return await analyze_image_nim(image_path, api_key)
+
+    elif provider == "cerebras":
+        logger.warning("%s Cerebras has no vision models — using mock analysis", TAG)
+        return _mock_analysis()
+
+    elif provider == "mistral":
+        api_key = os.getenv("MISTRAL_API_KEY", "")
+        if not api_key:
+            logger.warning("%s MISTRAL_API_KEY not set — using mock analysis", TAG)
+            return _mock_analysis()
+        return await analyze_image_mistral(image_path, api_key)
 
     else:
         raise ValueError(f"Unknown VLM provider: {provider}")

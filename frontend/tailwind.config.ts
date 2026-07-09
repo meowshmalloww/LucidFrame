@@ -9,40 +9,68 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        void: "#07070b",
-        panel: "#111118",
-        "panel-light": "#1a1a26",
-        accent: "#6c5ce7",
-        secondary: "#2d2d3f",
-        success: "#00d4aa",
+        void: "#09090B",
+        surface: "#111113",
+        elevated: "#18181B",
+        accent: {
+          DEFAULT: "#FFFFFF",
+          hover: "#E4E4E7",
+        },
+        success: "#22C55E",
+        warning: "#F59E0B",
+        danger: "#EF4444",
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "sans-serif"],
+        display: ["Inter", "system-ui", "sans-serif"],
         mono: ["JetBrains Mono", "monospace"],
       },
+      spacing: {
+        "sidebar": "64px",
+        "sidebar-expanded": "240px",
+      },
+      borderRadius: {
+        "card": "12px",
+        "btn": "6px",
+        "dialog": "14px",
+      },
       animation: {
-        "pulse-slow": "pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite",
-        "glow": "glow 2s ease-in-out infinite alternate",
-        "fade-in": "fadeIn 0.4s ease-out",
-        "subtle-pulse": "subtlePulse 2s ease-in-out infinite",
-        "slide-up": "slideUp 0.4s ease-out",
+        "fade-in": "fadeIn 0.2s ease-out",
+        "fade-out": "fadeOut 0.15s ease-in",
+        "slide-up": "slideUp 0.25s cubic-bezier(0.32, 0.72, 0, 1)",
+        "slide-down": "slideDown 0.25s cubic-bezier(0.32, 0.72, 0, 1)",
+        "slide-right": "slideRight 0.25s cubic-bezier(0.32, 0.72, 0, 1)",
+        "scale-in": "scaleIn 0.2s cubic-bezier(0.32, 0.72, 0, 1)",
+        "progress": "progress 1.5s ease-in-out infinite",
       },
       keyframes: {
-        glow: {
-          "0%": { boxShadow: "0 0 5px rgba(108, 92, 231, 0.3)" },
-          "100%": { boxShadow: "0 0 20px rgba(108, 92, 231, 0.5)" },
-        },
         fadeIn: {
           "0%": { opacity: "0" },
           "100%": { opacity: "1" },
+        },
+        fadeOut: {
+          "0%": { opacity: "1" },
+          "100%": { opacity: "0" },
         },
         slideUp: {
           "0%": { opacity: "0", transform: "translateY(8px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
-        subtlePulse: {
-          "0%, 100%": { opacity: "1" },
-          "50%": { opacity: "0.6" },
+        slideDown: {
+          "0%": { opacity: "0", transform: "translateY(-8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        slideRight: {
+          "0%": { opacity: "0", transform: "translateX(-8px)" },
+          "100%": { opacity: "1", transform: "translateX(0)" },
+        },
+        scaleIn: {
+          "0%": { opacity: "0", transform: "scale(0.96)" },
+          "100%": { opacity: "1", transform: "scale(1)" },
+        },
+        progress: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(100%)" },
         },
       },
     },

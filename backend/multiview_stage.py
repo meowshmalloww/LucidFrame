@@ -23,8 +23,10 @@ TAG = "[MULTIVIEW]"
 
 MULTIVIEW_MODEL = os.getenv("MULTIVIEW_MODEL", "zero123pp").lower()
 MULTIVIEW_STEPS = int(os.getenv("MULTIVIEW_STEPS", "75"))
+USE_IP_ADAPTER = os.getenv("USE_IP_ADAPTER", "true").lower() == "true"
 
 _PIPELINE: Any = None
+_IP_ADAPTER_LOADED = False
 
 
 def _has_cuda() -> bool:
@@ -49,9 +51,35 @@ def _load_zero123pp():
 
     pipe = DiffusionPipeline.from_pretrained(
         "sudo-ai/zero123plus-v1.2",
+        custom_pipeline="sudo-ai/zero123plus-pipeline",
         torch_dtype=torch.float16,
+        trust_remote_code=True,
     )
+
+    # Enable memory-efficient attention if available
+    try:
+        pipe.enable_xformers_memory_efficient_attention()
+        logger.info("%s xFormers attention enabled", TAG)
+    except Exception:
+        logger.info("%s xFormers not available, using default attention", TAG)
+
     pipe = pipe.to("cuda")
+
+    # Load IP-Adapter for style locking — forces original image textures
+    # into every generated view, preventing color/texture hallucination
+    global _IP_ADAPTER_LOADED
+    if USE_IP_ADAPTER and not _IP_ADAPTER_LOADED:
+        try:
+            pipe.load_ip_adapter(
+                "h94/IP-Adapter",
+                subfolder="sdxl_models",
+                weight_name="ip-adapter_sdxl.safetensors",
+            )
+            _IP_ADAPTER_LOADED = True
+            logger.info("%s IP-Adapter loaded for style locking", TAG)
+        except Exception as exc:
+            logger.warning("%s IP-Adapter load failed (continuing without): %s", TAG, exc)
+
     _PIPELINE = pipe
     logger.info("%s Zero123++ loaded in %.1fs", TAG, time.time() - t0)
     return _PIPELINE
@@ -128,7 +156,11 @@ def generate_multiview(
         logger.info("%s Generating 6 views from %dx%d image...", TAG, w_orig, h_orig)
 
         with torch.no_grad():
-            result = pipe(pil_img, num_inference_steps=MULTIVIEW_STEPS)
+            gen_kwargs = {"num_inference_steps": MULTIVIEW_STEPS}
+            if _IP_ADAPTER_LOADED:
+                gen_kwargs["ip_adapter_image"] = pil_img
+                gen_kwargs["ip_adapter_scale"] = 0.8
+            result = pipe(pil_img, **gen_kwargs)
 
         # Output is a 3x2 grid
         output_np = np.array(result.images[0])

@@ -218,39 +218,54 @@ async def _run_pipeline(
     (output_dir / "master_prompt.txt").write_text(master_prompt)
     (output_dir / "vlm_analysis.json").write_text(json.dumps(analysis, indent=2))
 
-    # ── Stage 2: Multi-View Hallucination ───────────────────────────────────
-    await progress.stage_start("multiview", "Generating 6 multi-view images...")
-    await progress.stage_progress("multiview", "Loading Zero123++ diffusion model...")
+    # ── Stage 2: Multi-View Hallucination (optional) ────────────────────────
+    multiview_enabled = os.getenv("MULTIVIEW_ENABLED", "on").lower() != "off"
+    mv_result: dict[str, Any] | None = None
 
-    from multiview_stage import generate_multiview, unload as unload_multiview
-    mv_result = await asyncio.to_thread(
-        generate_multiview,
-        image_path,
-        output_dir / "views",
-    )
+    if multiview_enabled:
+        await progress.stage_start("multiview", "Generating 6 multi-view images...")
+        await progress.stage_progress("multiview", "Loading Zero123++ diffusion model...")
 
-    if mv_result["errors"]:
-        await progress.warning("multiview", f"Errors: {mv_result['errors']}")
+        from multiview_stage import generate_multiview, unload as unload_multiview
+        mv_result = await asyncio.to_thread(
+            generate_multiview,
+            image_path,
+            output_dir / "views",
+        )
 
-    if not mv_result["views"]:
-        raise RuntimeError(f"Multi-view generation failed: {mv_result['errors']}")
+        if mv_result["errors"]:
+            await progress.warning("multiview", f"Errors: {mv_result['errors']}")
 
-    await progress.stage_done("multiview", {
-        "view_count": len(mv_result["views"]),
-        "generation_time_sec": mv_result["generation_time_sec"],
-    })
+        if not mv_result["views"]:
+            raise RuntimeError(f"Multi-view generation failed: {mv_result['errors']}")
 
-    # Free VRAM
-    await asyncio.to_thread(unload_multiview)
+        await progress.stage_done("multiview", {
+            "view_count": len(mv_result["views"]),
+            "generation_time_sec": mv_result["generation_time_sec"],
+        })
+
+        # Free VRAM
+        await asyncio.to_thread(unload_multiview)
+    else:
+        # Depth-direct mode: skip object-centric multi-view hallucination.
+        # The input image alone is enough for monocular depth reconstruction.
+        await progress.stage_start("multiview", "Skipping multi-view hallucination (depth-direct mode)")
+        await progress.stage_done("multiview", {
+            "view_count": 1,
+            "generation_time_sec": 0.0,
+            "skipped": True,
+        })
 
     # ── Stage 3: 3D Gaussian Reconstruction ─────────────────────────────────
     await progress.stage_start("reconstruction", "Reconstructing 3D Gaussians...")
     await progress.stage_progress("reconstruction", "Loading reconstruction model...")
 
+    view_paths = mv_result["view_paths"] if mv_result else [str(image_path)]
+
     from reconstruction_stage import reconstruct, unload as unload_recon
     gaussians = await asyncio.to_thread(
         reconstruct,
-        mv_result["view_paths"],
+        view_paths,
         output_dir,
     )
 

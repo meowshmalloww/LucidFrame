@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { SPLAT_URL_BASE } from "@/lib/api";
-import { CubeIcon, OrbitIcon, FpsIcon, EyeIcon } from "./Icons";
 
 export interface SplatViewerHandle {
   resetCamera: () => void;
@@ -61,7 +60,9 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
         setIsLoading(true);
         setLoadProgress(0);
 
-        const fullUrl = `${SPLAT_URL_BASE}${splatUrl}`;
+        const fullUrl = splatUrl.startsWith("http")
+          ? splatUrl
+          : `${SPLAT_URL_BASE}${splatUrl}`;
         await SPLAT.Loader.LoadAsync(fullUrl, scene, (progress: number) => {
           setLoadProgress(progress);
         });
@@ -155,84 +156,61 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
 
     if (!splatUrl) {
       return (
-        <div className={`flex items-center justify-center glass rounded-xl ${className}`}>
-          <div className="text-center flex flex-col items-center gap-3">
-            <CubeIcon size={40} className="text-gray-700" />
-            <p className="text-gray-600 text-sm">The dream will appear here</p>
+        <div className={`flex items-center justify-center rounded-card bg-void ${className}`}>
+          <div className="flex flex-col items-center gap-3 text-center">
+            <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" className="text-zinc-800">
+              <path d="M12 2L2 7l10 5 10-5-10-5z" />
+              <path d="M2 17l10 5 10-5" />
+              <path d="M2 12l10 5 10-5" />
+            </svg>
+            <p className="text-[14px] text-zinc-600">The 3D world will appear here</p>
           </div>
         </div>
       );
     }
 
     return (
-      <div ref={containerRef} className={`relative rounded-xl overflow-hidden bg-black ${className}`}>
+      <div ref={containerRef} className={`relative overflow-hidden rounded-card bg-void ${className}`}>
         <canvas
           ref={canvasRef}
-          className="w-full h-full block"
+          className="block h-full w-full"
           onClick={handleCanvasClick}
         />
 
         {/* Loading overlay */}
         {isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-20">
-            <div className="text-center flex flex-col items-center gap-4">
-              <CubeIcon size={32} className="text-accent animate-subtle-pulse" />
-              <div className="text-sm text-accent font-light tracking-wider">
-                Loading dream...
+          <div className="absolute inset-0 z-20 flex items-center justify-center bg-void/90">
+            <div className="flex flex-col items-center gap-4">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-white/[0.06] border-t-accent" />
+              <div className="text-[14px] font-medium text-zinc-400">
+                Loading 3D scene...
               </div>
-              <div className="w-48 h-[3px] bg-white/5 rounded-full overflow-hidden">
+              <div className="h-[3px] w-48 overflow-hidden rounded-full bg-white/[0.04]">
                 <div
                   className="h-full bg-accent transition-all duration-300"
                   style={{ width: `${loadProgress * 100}%` }}
                 />
               </div>
-              <div className="text-xs text-gray-500 font-mono">
+              <div className="text-[12px] font-mono text-zinc-600">
                 {Math.round(loadProgress * 100)}%
               </div>
             </div>
           </div>
         )}
 
-        {/* Mode toggle */}
-        <div className="absolute top-3 right-3 flex gap-1 z-10">
-          <button
-            onClick={() => onModeChange("orbit")}
-            className={`px-2.5 py-1.5 text-xs font-mono rounded-lg transition-all flex items-center gap-1.5 ${
-              mode === "orbit"
-                ? "bg-accent/20 text-accent border border-accent/30"
-                : "bg-panel/60 text-gray-500 hover:text-white border border-white/5"
-            }`}
-          >
-            <OrbitIcon size={12} />
-            <span>ORBIT</span>
-          </button>
-          <button
-            onClick={() => onModeChange("fps")}
-            className={`px-2.5 py-1.5 text-xs font-mono rounded-lg transition-all flex items-center gap-1.5 ${
-              mode === "fps"
-                ? "bg-accent/20 text-accent border border-accent/30"
-                : "bg-panel/60 text-gray-500 hover:text-white border border-white/5"
-            }`}
-          >
-            <FpsIcon size={12} />
-            <span>WASD</span>
-          </button>
-        </div>
-
         {/* WASD hint */}
         {showHint && mode === "fps" && !isLoading && (
-          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-            <div className="bg-black/60 px-6 py-4 rounded-xl text-center animate-fade-in flex flex-col items-center gap-2">
-              <EyeIcon size={20} className="text-accent" />
-              <p className="text-accent text-base font-light">Click to step into the dream</p>
-              <p className="text-gray-500 text-xs">WASD to move / Mouse to look / Space+Shift for up-down</p>
+          <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
+            <div className="flex flex-col items-center gap-2 rounded-card bg-surface/80 px-6 py-4 text-center backdrop-blur-sm animate-fade-in">
+              <p className="text-[15px] font-medium text-white">Click to enter</p>
+              <p className="text-[12px] text-zinc-500">WASD to move / Mouse to look / Space+Shift for up-down</p>
             </div>
           </div>
         )}
 
         {/* Orbit hint */}
         {showHint && mode === "orbit" && !isLoading && (
-          <div className="absolute bottom-3 left-3 bg-black/50 px-3 py-1.5 rounded-lg text-xs text-gray-500 z-10">
+          <div className="absolute bottom-3 left-3 z-10 rounded-btn bg-surface/80 px-3 py-1.5 text-[12px] text-zinc-500 backdrop-blur-sm">
             Drag to orbit / Scroll to zoom
           </div>
         )}
