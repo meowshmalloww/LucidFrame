@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import "@/styles/globals.css";
 import { Sidebar } from "@/components/Sidebar";
+import "@/styles/globals.css";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -10,21 +10,17 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "LucidFrame — Turn one image into a world",
-  description: "Upload one photograph and LucidFrame reconstructs an explorable 3D Gaussian Splat scene.",
+  title: "LucidFrame - Turn an image into a spatial artwork",
+  description: "Local and hosted tools for creating navigable Gaussian-splat scenes from images and panoramas.",
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="bg-void text-zinc-100 antialiased">
+      <body>
         <div className="flex h-screen w-screen overflow-hidden">
           <Sidebar />
-          <main className="flex-1 overflow-hidden">{children}</main>
+          <main className="min-w-0 flex-1 overflow-hidden">{children}</main>
         </div>
       </body>
     </html>

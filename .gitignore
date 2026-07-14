@@ -18,6 +18,8 @@ backend/outputs/
 node_modules/
 .next/
 out/
+.next-*/
+*.tsbuildinfo
 build/
 
 # OS

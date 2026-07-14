@@ -22,6 +22,7 @@ export interface LogEntry {
 export interface PipelineState {
   isRunning: boolean;
   isDone: boolean;
+  worldUrl: string | null;
   error: string | null;
   splatUrl: string | null;
   stages: Record<string, StageStatus>;
@@ -30,6 +31,8 @@ export interface PipelineState {
   dreamPrompt: string | null;
   gaussianCount: number | null;
   viewCount: number | null;
+  renderer: "local-splat";
+  coverage: string | null;
 }
 
 const INITIAL_STATE: PipelineState = {
@@ -37,6 +40,7 @@ const INITIAL_STATE: PipelineState = {
   isDone: false,
   error: null,
   splatUrl: null,
+  worldUrl: null,
   stages: {
     vlm: "pending",
     llm: "pending",
@@ -51,6 +55,8 @@ const INITIAL_STATE: PipelineState = {
   dreamPrompt: null,
   gaussianCount: null,
   viewCount: null,
+  renderer: "local-splat",
+  coverage: null,
 };
 
 export function usePipeline() {
@@ -126,6 +132,9 @@ export function usePipeline() {
           isRunning: false,
           isDone: true,
           splatUrl: event.splat_url || null,
+          renderer: "local-splat",
+          worldUrl: event.world_url || (typeof event.data?.world_url === "string" ? event.data.world_url : null),
+          coverage: typeof event.data?.coverage === "string" ? event.data.coverage : null,
         }));
       } else if (eventType === "error") {
         setState((prev) => ({
@@ -178,12 +187,12 @@ export function usePipeline() {
         isDone: true,
         splatUrl,
         stages: {
-          vlm: "done",
-          llm: "done",
-          multiview: "done",
+          vlm: "pending",
+          llm: "pending",
+          multiview: "pending",
           reconstruction: "done",
-          stitch: "done",
-          difix: "done",
+          stitch: "pending",
+          difix: "pending",
           compile: "done",
         },
       });

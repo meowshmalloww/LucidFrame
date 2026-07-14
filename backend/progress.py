@@ -62,11 +62,15 @@ class ProgressBroadcaster:
         await self._send(event)
         logger.info("%s Stage '%s' done in %.1fs", TAG, stage, elapsed)
 
-    async def pipeline_done(self, splat_url: str):
-        await self._send({
+    async def pipeline_done(self, splat_url: str, data: dict | None = None):
+        """Emit completion, with optional renderer/world metadata for the client."""
+        event: dict[str, Any] = {
             "event": "pipeline_done",
             "splat_url": splat_url,
-        })
+        }
+        if data:
+            event["data"] = data
+        await self._send(event)
 
     async def error(self, stage: str, error_msg: str):
         await self._send({

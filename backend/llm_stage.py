@@ -16,7 +16,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 TAG = "[LLM]"
 
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openai").lower()
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "offline").lower()
 
 LLM_SYSTEM_PROMPT = """You are the dream engine of LucidFrame, an AI art installation that hallucinates walkable 3D worlds from single images.
 
@@ -250,9 +250,12 @@ async def generate_dream_prompt(analysis: dict[str, Any]) -> str:
 
     Returns:
         Master Scene Prompt string (2-3 sentences of dreamlike scene description).
-    Falls back to a mock prompt if no API key is configured.
+    Defaults to an offline composition from the local visual analysis.
     """
     provider = LLM_PROVIDER
+
+    if provider in {"offline", "local", "mock"}:
+        return _mock_dream_prompt(analysis)
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "")

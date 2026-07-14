@@ -11,6 +11,7 @@ Each Gaussian occupies 32 bytes:
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -46,7 +47,20 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
 
     # Process scales: exponentiate (models output log-scale) → clamp → float32
     scales = np.exp(gaussians.scales.astype(np.float32))  # undo log-scale
-    scales = np.clip(scales, 0.001, 0.5)  # clamp to reasonable range
+    # Preserve the learned anisotropic support. The former 5 cm ceiling clipped
+    # valid SHARP-360 surfaces and opened visible gaps between panorama faces.
+    max_scale = float(os.getenv("SPLAT_MAX_SCALE", "0.10"))
+    max_scale = min(max(max_scale, 0.02), 0.25)
+    clipped = int(np.count_nonzero((scales < 0.00005) | (scales > max_scale)))
+    scales = np.clip(scales, 0.00005, max_scale)
+    if clipped:
+        logger.info(
+            "%s Clamped %d/%d scale axes outside [0.00005, %.3f]",
+            TAG,
+            clipped,
+            scales.size,
+            max_scale,
+        )
 
     # Process colors: clamp to [0, 255] → uint8
     colors = gaussians.colors.astype(np.float32)
@@ -62,8 +76,8 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
     norms = np.linalg.norm(rotations, axis=1, keepdims=True)
     norms = np.where(norms > 0, norms, 1.0)
     rotations = rotations / norms
-    # Map from [-1, 1] to [0, 255]
-    rotations_u8 = np.clip((rotations + 1.0) * 127.5, 0, 255).astype(np.uint8)
+    # Map from [-1, 1] to gsplat.js signed-byte encoding.
+    rotations_u8 = np.clip(rotations * 128.0 + 128.0, 0, 255).astype(np.uint8)
 
     # Combine RGBA
     rgba = np.column_stack([colors, opacities.flatten()])  # (N, 4) uint8

@@ -20,7 +20,7 @@ import httpx
 logger = logging.getLogger(__name__)
 TAG = "[VLM]"
 
-VLM_PROVIDER = os.getenv("VLM_PROVIDER", "openai").lower()
+VLM_PROVIDER = os.getenv("VLM_PROVIDER", "offline").lower()
 
 VLM_ANALYSIS_PROMPT = """You are a visual analyst examining an image for an AI art project called LucidFrame.
 Analyze this image and return a JSON object with the following fields:
@@ -350,10 +350,13 @@ async def analyze_image(image_path: Path) -> dict[str, Any]:
     """
     Main entry point: analyze an image using the configured VLM provider.
 
-    Supported providers: openai, anthropic, gemini, groq, openrouter
-    Falls back to a mock analysis if no API key is configured.
+    The default offline provider never sends an uploaded image to a service.
+    Cloud providers are explicit opt-in configuration only.
     """
     provider = VLM_PROVIDER
+
+    if provider in {"offline", "local", "mock"}:
+        return _mock_analysis()
 
     if provider == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "")
