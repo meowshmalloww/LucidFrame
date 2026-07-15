@@ -42,6 +42,7 @@ const INITIAL_STATE: PipelineState = {
   splatUrl: null,
   worldUrl: null,
   stages: {
+    restoration: "pending",
     vlm: "pending",
     llm: "pending",
     multiview: "pending",
@@ -187,6 +188,7 @@ export function usePipeline() {
         isDone: true,
         splatUrl,
         stages: {
+          restoration: "pending",
           vlm: "pending",
           llm: "pending",
           multiview: "pending",

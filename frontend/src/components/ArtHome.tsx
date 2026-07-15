@@ -7,6 +7,7 @@ import {
   getProviders,
   type PipelineProvider,
   type ProviderStatus,
+  type QualityProfile,
 } from "@/lib/api";
 
 type ImageInfo = { width: number; height: number; ratio: number };
@@ -14,29 +15,36 @@ type ImageInfo = { width: number; height: number; ratio: number };
 const modes: Array<{
   id: PipelineProvider;
   title: string;
-  eyebrow: string;
+  meta: string;
   description: string;
   icon: "frame" | "pano" | "cloud";
 }> = [
   {
     id: "local",
     title: "Image to 3D",
-    eyebrow: "Local / no credits",
-    description: "Predict a high-detail metric Gaussian scene from one photograph for nearby exploration.",
+    meta: "On this computer",
+    description: "Create an explorable scene from one photo.",
     icon: "frame",
+  },
+  {
+    id: "local_world",
+    title: "Image to 360",
+    meta: "On this computer · Slowest",
+    description: "Generate and connect every direction around one photo.",
+    icon: "pano",
   },
   {
     id: "local_pano",
     title: "Panorama to 360",
-    eyebrow: "Local / no credits",
-    description: "Merge overlapping learned Gaussian views with depth alignment and measured pole coverage.",
+    meta: "On this computer",
+    description: "Turn a wide or equirectangular image into a scene.",
     icon: "pano",
   },
   {
     id: "worldlabs",
-    title: "Image to World",
-    eyebrow: "World Labs / paid",
-    description: "Send one normal image to Marble and open the result in its hosted world viewer.",
+    title: "World Labs",
+    meta: "Hosted · Uses credits",
+    description: "Create a Marble world from one image.",
     icon: "cloud",
   },
 ];
@@ -49,6 +57,7 @@ export function ArtHome() {
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
   const [dragging, setDragging] = useState(false);
   const [mode, setMode] = useState<PipelineProvider>("local");
+  const [qualityProfile, setQualityProfile] = useState<QualityProfile>("detail");
   const [providers, setProviders] = useState<Partial<Record<PipelineProvider, ProviderStatus>>>({});
   const [backendReady, setBackendReady] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +136,7 @@ export function ArtHome() {
     setStarting(true);
     setError(null);
     try {
-      const result = await generateWorld(selected, mode, "");
+      const result = await generateWorld(selected, mode, "", qualityProfile);
       sessionStorage.setItem("lucidframe-job-id", result.job_id);
       sessionStorage.setItem("lucidframe-project-name", selected.name.replace(/\.[^.]+$/, ""));
       sessionStorage.setItem("lucidframe-provider", mode);
@@ -140,31 +149,20 @@ export function ArtHome() {
     } finally {
       setStarting(false);
     }
-  }, [backendReady, mode, preview, providers.worldlabs?.available, providers.worldlabs?.estimate_label, router, selected, starting]);
+  }, [backendReady, mode, preview, providers.worldlabs?.available, providers.worldlabs?.estimate_label, qualityProfile, router, selected, starting]);
 
-  const selectedMode = modes.find((item) => item.id === mode) || modes[0];
   const panoProfile = describePanorama(imageInfo);
-  const canBegin = Boolean(selected) && !starting && backendReady !== false;
+  const canBegin = Boolean(selected) && !starting && backendReady === true;
 
   return (
     <div className="h-full overflow-y-auto bg-[#f3f2ec] text-[#1b1b18]">
       <div className="mx-auto w-full max-w-[1320px] px-6 py-8 lg:px-10 lg:py-11">
-        <header className="grid gap-4 border-b border-[#d5d3ca] pb-8 lg:grid-cols-[1fr_28rem] lg:items-end">
-          <div>
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#707068]">Spatial art studio</p>
-            <h1 className="mt-3 max-w-3xl text-[clamp(2.3rem,5vw,4.8rem)] font-medium leading-[0.96] tracking-[-0.055em]">
-              Continue an image beyond its frame.
-            </h1>
-          </div>
-          <div className="flex items-start justify-between gap-6 lg:pb-1">
-            <p className="max-w-sm text-sm leading-6 text-[#6d6c65]">
-              Build a real Gaussian-splat scene locally, or connect World Labs when a generated world is worth the credits.
-            </p>
-            <ConnectionStatus ready={backendReady} />
-          </div>
+        <header className="border-b border-[#d5d3ca] pb-7">
+          <h1 className="text-[clamp(2rem,4vw,3.25rem)] font-medium leading-none tracking-[-0.045em]">Create a scene</h1>
+          <p className="mt-3 text-sm leading-6 text-[#686760]">Choose an image, then select how you want to build it.</p>
         </header>
 
-        <section className="mt-8 grid gap-7 xl:grid-cols-[minmax(0,1fr)_370px]">
+        <section className="mt-8 grid gap-7 lg:grid-cols-[minmax(0,1fr)_360px]">
           <div className="min-w-0">
             <div
               role="button"
@@ -186,7 +184,7 @@ export function ArtHome() {
                 if (file) chooseFile(file);
               }}
               className={[
-                "relative flex min-h-[480px] cursor-pointer items-center justify-center overflow-hidden rounded-[12px] border bg-[#e7e5dc] transition",
+                "relative flex min-h-[450px] cursor-pointer items-center justify-center overflow-hidden rounded-[10px] border bg-[#e7e5dc] transition",
                 dragging ? "border-[#315c4a] bg-[#dfe8e2]" : "border-[#c9c7bd] hover:border-[#96948b]",
               ].join(" ")}
             >
@@ -227,10 +225,10 @@ export function ArtHome() {
             </div>
           </div>
 
-          <aside className="self-start rounded-[12px] border border-[#d1cfc5] bg-[#faf9f5] p-5 shadow-[0_18px_45px_rgba(39,39,33,0.06)]">
+          <aside className="self-start rounded-[10px] border border-[#d1cfc5] bg-[#faf9f5] p-5">
             <div className="border-b border-[#dedcd3] pb-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#77766f]">Reconstruction method</p>
-              <p className="mt-2 text-sm leading-6 text-[#5f5e58]">Choose based on what the source actually contains.</p>
+              <h2 className="text-sm font-semibold">Method</h2>
+              <p className="mt-1.5 text-xs leading-5 text-[#686760]">Choose the option that matches your image.</p>
             </div>
 
             <div className="mt-4 grid gap-2">
@@ -239,27 +237,55 @@ export function ArtHome() {
                   key={item.id}
                   item={item}
                   active={mode === item.id}
-                  available={item.id !== "worldlabs" || providers.worldlabs?.available === true}
+                  available={providers[item.id]?.available !== false}
                   onClick={() => {
                     setMode(item.id);
+                    setQualityProfile(item.id === "local" ? "detail" : "balanced");
                     setError(null);
                   }}
                 />
               ))}
             </div>
 
-            <div className="mt-5 rounded-[9px] border border-[#dddacf] bg-[#f3f2ec] p-4">
-              <p className="text-xs font-semibold">{selectedMode.title}</p>
-              <p className="mt-2 text-xs leading-5 text-[#686760]">
-                {mode === "local_pano"
-                  ? panoProfile
-                  : mode === "local"
-                    ? "SHARP predicts 1.18M metric Gaussians at a fixed high inference resolution. Nearby views are strongest; a single photo still cannot reveal its back side. Research/non-commercial model license."
-                    : providers.worldlabs?.available
-                      ? (providers.worldlabs.estimate_label || "Paid hosted generation is connected.")
-                      : "API key required. Configure it on the Settings page."}
+            {mode === "local_pano" && <p className="mt-4 text-xs leading-5 text-[#686760]">{panoProfile}</p>}
+            {mode === "worldlabs" && (
+              <p className="mt-4 text-xs leading-5 text-[#686760]">
+                {providers.worldlabs?.available ? (providers.worldlabs.estimate_label || "World Labs is connected.") : "Add an API key in Settings before using this option."}
               </p>
-            </div>
+            )}
+
+            {mode !== "worldlabs" && (
+              <fieldset className="mt-5 border-t border-[#dedcd3] pt-4">
+                <legend className="text-xs font-semibold text-[#4f4e48]">Quality</legend>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <QualityChoice
+                    active={qualityProfile === "balanced"}
+                    title="Balanced"
+                    note={mode === "local_pano" ? "4 overlapping views" : mode === "local_world" ? "Fewer generation steps" : "Standard input"}
+                    onClick={() => setQualityProfile("balanced")}
+                  />
+                  <QualityChoice
+                    active={qualityProfile === "detail"}
+                    title="Detail"
+                    note={mode === "local_pano" ? "6 views, larger file" : mode === "local_world" ? "More generation steps" : "Restore small images"}
+                    onClick={() => setQualityProfile("detail")}
+                  />
+                </div>
+                <p className="mt-3 text-[11px] leading-5 text-[#77766f]">
+                  {mode === "local_world"
+                    ? "Detail adds more generation steps and takes longer."
+                    : mode === "local_pano"
+                    ? "Detail adds two more overlapping views and creates a larger file."
+                    : "Detail restores small source images before reconstruction."}
+                </p>
+              </fieldset>
+            )}
+
+            {backendReady === false && (
+              <p role="status" className="mt-4 border-l-2 border-[#a23d37] pl-3 text-xs leading-5 text-[#8c332f]">
+                The local backend is unavailable. Start it on port 8000 and refresh.
+              </p>
+            )}
 
             {error && (
               <p role="alert" className="mt-4 border-l-2 border-[#a23d37] pl-3 text-xs leading-5 text-[#8c332f]">
@@ -273,7 +299,7 @@ export function ArtHome() {
               disabled={!canBegin}
               className="mt-5 flex w-full items-center justify-between rounded-[9px] bg-[#1c1c19] px-4 py-3.5 text-sm font-semibold text-white transition hover:bg-[#315c4a] disabled:cursor-not-allowed disabled:bg-[#b5b3aa]"
             >
-              <span>{starting ? "Starting reconstruction..." : actionLabel(mode)}</span>
+              <span>{starting ? "Starting…" : actionLabel(mode)}</span>
               <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2" aria-hidden>
                 <path d="M5 12h14M14 7l5 5-5 5" />
               </svg>
@@ -281,37 +307,22 @@ export function ArtHome() {
           </aside>
         </section>
 
-        <section className="mt-12 grid gap-6 border-t border-[#d5d3ca] pt-7 md:grid-cols-3">
-          <Fact index="01" title="Visible evidence" text="Source pixels remain the visual anchor instead of being replaced by a text-only generation." />
-          <Fact index="02" title="Learned geometry" text="SHARP predicts anisotropic Gaussian position, scale, orientation, color, and opacity rather than stretching one depth sheet." />
-          <Fact index="03" title="Reliable motion" text="Perspective mode supports nearby motion; the eight-view panorama mode adds full look-around and bounded translation." />
-        </section>
       </div>
     </div>
   );
 }
 
 function describePanorama(info: ImageInfo | null) {
-  if (!info) return "Use a landscape panorama. A true 2:1 equirectangular capture gives SHARP-360 real pixels for the horizon, zenith, and nadir.";
-  if (info.ratio >= 1.9 && info.ratio <= 2.1) return "Detected full-sphere equirectangular panorama. Learned Gaussian views will cover the horizon and both measured poles.";
-  if (info.ratio > 2.1) return "Detected a vertically cropped or wide panorama. The horizon receives learned geometry, but absent zenith and nadir pixels must still be extended.";
-  if (info.ratio >= 1.2) return "Detected a partial panorama. It can run, but unobserved side directions are synthesized by reflection and cannot match a true 360 capture.";
-  return "This is not a landscape panorama. It can still be uploaded, but Image to 3D is the more reliable mode.";
+  if (!info) return "Landscape panoramas work best. A 2:1 image includes the full sphere.";
+  if (info.ratio >= 1.9 && info.ratio <= 2.1) return "This looks like a full 2:1 panorama.";
+  if (info.ratio > 2.1) return "This wide panorama can run, but the top and bottom may need to be filled.";
+  if (info.ratio >= 1.2) return "This appears to be a partial panorama. Missing directions will be estimated.";
+  return "This does not look like a panorama. Image to 3D may work better.";
 }
 
 function actionLabel(mode: PipelineProvider) {
-  if (mode === "local_pano") return "Build local 360 scene";
-  if (mode === "worldlabs") return "Create paid World Labs world";
-  return "Build local 3D scene";
-}
-
-function ConnectionStatus({ ready }: { ready: boolean | null }) {
-  return (
-    <div className="flex shrink-0 items-center gap-2 rounded-[8px] border border-[#cbc9bf] bg-[#faf9f5] px-3 py-2 text-xs text-[#5f5e58]">
-      <span className={ready === false ? "h-2 w-2 rounded-[2px] bg-[#a23d37]" : ready === true ? "h-2 w-2 rounded-[2px] bg-[#3f765e]" : "h-2 w-2 rounded-[2px] bg-[#a29f94]"} />
-      {ready === false ? "Backend offline" : ready === true ? "Local backend ready" : "Checking backend"}
-    </div>
-  );
+  if (mode === "worldlabs") return "Create with World Labs";
+  return "Create scene";
 }
 
 function EmptyUpload() {
@@ -323,7 +334,7 @@ function EmptyUpload() {
         <circle cx="16" cy="16" r="2.5" />
       </svg>
       <h2 className="mt-5 text-xl font-medium tracking-[-0.025em]">Choose a source image</h2>
-      <p className="mt-2 text-sm leading-6 text-[#6d6c65]">Drop an image here, or click to browse. Nothing is uploaded to a third party in either local mode.</p>
+      <p className="mt-2 text-sm leading-6 text-[#6d6c65]">Drop an image here or choose a JPG, PNG, or WebP file.</p>
       <span className="mt-5 inline-block rounded-[8px] border border-[#aaa89e] bg-[#f7f6f0] px-4 py-2 text-xs font-semibold">Browse files</span>
     </div>
   );
@@ -343,9 +354,10 @@ function ModeChoice({
   return (
     <button
       type="button"
+      disabled={!available}
       onClick={onClick}
       className={[
-        "grid w-full grid-cols-[34px_1fr] gap-3 rounded-[9px] border p-3.5 text-left transition",
+        "grid w-full grid-cols-[34px_1fr] gap-3 rounded-[9px] border p-3.5 text-left transition disabled:cursor-not-allowed disabled:opacity-55",
         active ? "border-[#315c4a] bg-[#edf2ee]" : "border-[#dedcd3] bg-white hover:border-[#aaa89e]",
       ].join(" ")}
     >
@@ -353,10 +365,10 @@ function ModeChoice({
       <span>
         <span className="flex items-center justify-between gap-2">
           <span className="text-sm font-semibold text-[#24241f]">{item.title}</span>
-          {!available && item.id === "worldlabs" && <span className="text-[10px] uppercase tracking-wider text-[#8d5f26]">Key needed</span>}
+          {!available && <span className="text-[11px] text-[#8d5f26]">{item.id === "worldlabs" ? "Needs API key" : "Not installed"}</span>}
         </span>
-        <span className="mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.12em] text-[#77766f]">{item.eyebrow}</span>
-        <span className="mt-2 block text-xs leading-5 text-[#686760]">{item.description}</span>
+        <span className="mt-0.5 block text-[11px] text-[#77766f]">{item.meta}</span>
+        <span className="mt-1.5 block text-xs leading-5 text-[#686760]">{item.description}</span>
       </span>
     </button>
   );
@@ -372,14 +384,25 @@ function ModeIcon({ type }: { type: "frame" | "pano" | "cloud" }) {
   return <svg viewBox="0 0 32 32" className="h-8 w-8 fill-none stroke-[#3f5148] stroke-[1.35]" aria-hidden><rect x="5" y="6" width="22" height="20" rx="1.5" /><path d="m8 22 6-7 5 5 3-3 3 5" /></svg>;
 }
 
-function Fact({ index, title, text }: { index: string; title: string; text: string }) {
+function QualityChoice({
+  active,
+  title,
+  note,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  note: string;
+  onClick: () => void;
+}) {
   return (
-    <div className="grid grid-cols-[2rem_1fr] gap-3">
-      <span className="text-[10px] font-semibold text-[#8a8981]">{index}</span>
-      <div>
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <p className="mt-2 text-xs leading-5 text-[#6d6c65]">{text}</p>
-      </div>
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      className={active ? "rounded-[8px] border border-[#315c4a] bg-[#edf2ee] p-3 text-left" : "rounded-[8px] border border-[#d5d3ca] bg-white p-3 text-left hover:border-[#96948b]"}
+    >
+      <span className="block text-xs font-semibold">{title}</span>
+      <span className="mt-1 block text-[10px] leading-4 text-[#77766f]">{note}</span>
+    </button>
   );
 }

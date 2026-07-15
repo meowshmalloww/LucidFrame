@@ -47,10 +47,12 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
 
     # Process scales: exponentiate (models output log-scale) → clamp → float32
     scales = np.exp(gaussians.scales.astype(np.float32))  # undo log-scale
-    # Preserve the learned anisotropic support. The former 5 cm ceiling clipped
-    # valid SHARP-360 surfaces and opened visible gaps between panorama faces.
-    max_scale = float(os.getenv("SPLAT_MAX_SCALE", "0.10"))
-    max_scale = min(max(max_scale, 0.02), 0.25)
+    # Preserve the learned anisotropic support. SHARP legitimately predicts
+    # broad wall/background axes (the released model reaches roughly 0.85 m on
+    # our regression scene); the former 10 cm ceiling flattened those surfaces
+    # and opened pinholes in the web render. Keep only an outlier guard here.
+    max_scale = float(os.getenv("SPLAT_MAX_SCALE", "1.00"))
+    max_scale = min(max(max_scale, 0.02), 2.00)
     clipped = int(np.count_nonzero((scales < 0.00005) | (scales > max_scale)))
     scales = np.clip(scales, 0.00005, max_scale)
     if clipped:

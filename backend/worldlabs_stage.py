@@ -88,7 +88,7 @@ def clear_runtime_settings() -> None:
 
 
 async def configure_runtime_settings(api_key: str, model: str) -> dict[str, Any]:
-    """Verify a local-session key with the non-billable credits endpoint, then retain it in memory only."""
+    """Verify a session key with the documented credits endpoint, then retain it in memory."""
     global _runtime_api_key, _runtime_model, _runtime_credit_balance
     key = api_key.strip()
     if len(key) < 12:
@@ -164,7 +164,10 @@ async def generate_world(
         upload = prepared.get("upload_info") or {}
         media = prepared.get("media_asset") or {}
         upload_url = upload.get("upload_url")
-        media_id = media.get("id")
+        # The public API calls this field ``media_asset_id``.  Do not accept a
+        # generic ``id`` here: that hid a contract mismatch until the first
+        # real paid generation was attempted.
+        media_id = media.get("media_asset_id")
         if not upload_url or not media_id:
             raise WorldLabsError("World Labs returned incomplete media-upload details.")
 
@@ -178,6 +181,10 @@ async def generate_world(
         world_prompt: dict[str, object] = {
             "type": "image",
             "image_prompt": {"source": "media_asset", "media_asset_id": media_id},
+            # This product path is intentionally a normal single image.  An
+            # explicit false avoids accidental panorama pricing/behaviour for
+            # unusually wide source photographs.
+            "is_pano": False,
         }
         if text_prompt.strip():
             world_prompt["text_prompt"] = text_prompt.strip()
@@ -186,7 +193,7 @@ async def generate_world(
         created = await client.post(
             f"{API_ROOT}/worlds:generate",
             headers=headers,
-            json={"display_name": display_name[:120] or "LucidFrame World", "model": model, "world_prompt": world_prompt},
+            json={"display_name": display_name[:64] or "LucidFrame World", "model": model, "world_prompt": world_prompt},
         )
         if created.is_error:
             raise WorldLabsError(_error_message("World Labs could not start this world", created))
@@ -202,8 +209,18 @@ async def generate_world(
             if operation.is_error:
                 raise WorldLabsError(_error_message("Could not check World Labs generation", operation))
             data = operation.json() or {}
-            status = ((data.get("metadata") or {}).get("progress") or {})
-            description = str(status.get("description") or status.get("status") or "World Labs is composing the 360-degree scene...")
+            metadata = data.get("metadata") or {}
+            status = metadata.get("progress") or {}
+            if isinstance(status, dict):
+                description = str(
+                    status.get("description")
+                    or status.get("status")
+                    or "World Labs is composing the 360-degree scene..."
+                )
+            elif isinstance(status, (int, float)):
+                description = f"World Labs generation is {round(float(status))}% complete..."
+            else:
+                description = "World Labs is composing the 360-degree scene..."
             if description != last_description:
                 await say(description)
                 last_description = description
@@ -213,9 +230,11 @@ async def generate_world(
                 raise WorldLabsError(str(data["error"]))
             world = data.get("response") or {}
             world_url = world.get("world_marble_url")
-            world_id = world.get("id") or ((data.get("metadata") or {}).get("world_id"))
-            if not world_url:
-                raise WorldLabsError("World Labs completed without a viewer URL.")
+            world_id = world.get("world_id") or metadata.get("world_id")
+            if not world_url and world_id:
+                world_url = f"https://marble.worldlabs.ai/world/{world_id}"
+            if not world_url or not world_id:
+                raise WorldLabsError("World Labs completed without a world id or viewer URL.")
             assets = world.get("assets") or {}
             return {
                 "world_id": str(world_id or ""),

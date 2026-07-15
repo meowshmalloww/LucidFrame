@@ -36,6 +36,17 @@ This is nearby-view synthesis. It cannot reconstruct the back side of an object 
 
 The old continuous spherical depth lift remains an automatic fallback. Its manifest says `aligned_depth_fallback`; it is never labeled SHARP-360.
 
+## Mode C: one perspective image to a generated 360 world
+
+1. The source is aspect-preserved inside a square cubemap conditioning face using reflected padding rather than stretching or black bars.
+2. OpenCubeDiff jointly denoises six 95-degree faces while holding the conditioned front latent fixed. The faces are cropped to 90 degrees and converted to a 2048×1024 equirectangular panorama.
+3. CubeDiff is fully unloaded before panoramic depth inference begins.
+4. The generated ERP follows the same SHARP-360 alignment path as a measured panorama, including a shared panoramic depth reference, overlapping horizon fields, and zenith/nadir caps.
+5. Exact angular ownership prevents neighboring learned faces from ghosting. A sparse depth-aligned spherical underlay sits behind the learned Gaussians to cover boundary and low-opacity pinholes, while source-direction comparison repairs only severe dark highlight outliers.
+6. The manifest records the source direction as observed and all unseen directions as generated. If SHARP-360 is unavailable, the named `aligned_depth_fallback` remains available without being mislabeled.
+
+This mode fills angular space around the camera. It materially improves turning and modest movement in every direction, but it does not make deeply occluded geometry factual or guarantee unlimited translation.
+
 ## Binary format
 
 Each `.splat` record is 32 bytes:
@@ -51,17 +62,17 @@ The format omits spherical-harmonic coefficients. It is efficient in the browser
 
 ## Memory strategy
 
-Only one large model is retained at a time. Panorama depth is computed first, then Depth Anything is unloaded before SHARP face inference. SHARP is unloaded before compilation. Four horizon faces are the default because six faces plus pole caps approach the practical memory ceiling on this GPU.
+Only one large model is retained at a time. Image-to-360 generation unloads CubeDiff before panorama depth; panorama depth unloads Depth Anything before SHARP face inference; SHARP is unloaded before compilation. Four horizon faces are the default because six faces plus pole caps approach the practical memory ceiling on this GPU.
 
 ## Quality controls
 
 - `SHARP_MIN_OPACITY=0.01`
 - `SHARP360_MIN_OPACITY=0.02`
-- `SHARP360_ERP_WIDTH=1536`
-- `SHARP360_SIDE_COUNT=4`
+- `SHARP360_ERP_WIDTH=auto` (Balanced 1536; Detail 2048)
+- `SHARP360_SIDE_COUNT=auto` (Balanced 4; Detail 6 overlapping horizon views)
 - `SHARP360_INCLUDE_CAPS=auto`
 - `SHARP360_TARGET_RADIUS=4.0`
-- `SPLAT_MAX_SCALE=0.10`
+- `SPLAT_MAX_SCALE=1.00` (outlier guard; smaller values can cut holes into SHARP wall splats)
 
 Every successful output records a manifest and model-specific JSON quality report. A failed quality backend falls back transparently or fails the job; demo media is disabled by default.
 

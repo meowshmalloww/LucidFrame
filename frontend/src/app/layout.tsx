@@ -10,7 +10,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "LucidFrame - Turn an image into a spatial artwork",
+  title: "LucidFrame",
   description: "Local and hosted tools for creating navigable Gaussian-splat scenes from images and panoramas.",
 };
 

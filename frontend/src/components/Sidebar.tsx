@@ -25,10 +25,13 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-full w-[68px] shrink-0 flex-col border-r border-[#2d2d29] bg-[#1b1b18] text-[#f5f4ed] lg:w-[216px]">
-      <Link href="/" className="flex h-[72px] items-center gap-3 border-b border-[#2d2d29] px-5 lg:px-6">
-        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-[7px] border border-[#77766e] text-[11px] font-semibold tracking-tight">LF</span>
-        <span className="hidden text-sm font-semibold tracking-[-0.02em] lg:block">LucidFrame</span>
+    <aside className="flex h-full w-[68px] shrink-0 flex-col border-r border-[#30302c] bg-[#1b1b18] text-[#f5f4ed] lg:w-[204px]">
+      <Link href="/" aria-label="LucidFrame home" className="flex h-[68px] items-center gap-3 border-b border-[#30302c] px-[21px] lg:px-5">
+        <svg viewBox="0 0 28 28" className="h-[26px] w-[26px] shrink-0 fill-none stroke-current stroke-[1.5]" aria-hidden>
+          <path d="M5 8V5h7M16 5h7v7M23 16v7h-7M12 23H5v-7" />
+          <path d="m9 18 4-5 3 3 2-2 2 4" />
+        </svg>
+        <span className="hidden text-[15px] font-medium tracking-[-0.025em] lg:block">LucidFrame</span>
       </Link>
       <nav aria-label="Primary navigation" className="flex flex-1 flex-col gap-1 p-3 lg:p-4">
         {navItems.map((item) => {
@@ -52,10 +55,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="border-t border-[#2d2d29] p-4 text-[11px] leading-relaxed text-[#77766e]">
-        <span className="hidden lg:block">Local-first spatial studio</span>
-        <span className="block text-center lg:hidden">v1</span>
-      </div>
     </aside>
   );
 }

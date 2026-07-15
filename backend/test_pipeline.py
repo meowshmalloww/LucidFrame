@@ -14,7 +14,7 @@ import httpx
 import websockets
 
 
-async def main(backend: str) -> None:
+async def main(backend: str, provider: str, quality: str) -> None:
     ws_url = backend.replace("http://", "ws://").replace("https://", "wss://")
     upload_dir = pathlib.Path(__file__).parent / "uploads"
     img_path = next(
@@ -35,7 +35,7 @@ async def main(backend: str) -> None:
         response = httpx.post(
             f"{backend}/api/generate-world",
             files={"image": image},
-            data={"provider": "local"},
+            data={"provider": provider, "quality_profile": quality},
             timeout=30,
         )
     response.raise_for_status()
@@ -66,5 +66,15 @@ if __name__ == "__main__":
         "--backend",
         default=os.getenv("LUCIDFRAME_BACKEND", "http://127.0.0.1:8000"),
     )
+    parser.add_argument(
+        "--provider",
+        choices=("local", "local_world", "local_pano"),
+        default="local",
+    )
+    parser.add_argument(
+        "--quality",
+        choices=("balanced", "detail"),
+        default="balanced",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.backend.rstrip("/")))
+    asyncio.run(main(args.backend.rstrip("/"), args.provider, args.quality))

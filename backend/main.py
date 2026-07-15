@@ -13,7 +13,10 @@ import asyncio
 import json
 import logging
 import os
+import re
+import shutil
 import uuid
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -37,7 +40,25 @@ logging.basicConfig(
 )
 logger = logging.getLogger("lucidframe")
 
-app = FastAPI(title="LucidFrame", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    logger.info("LucidFrame backend starting up...")
+    health = get_health()
+    if health["gpu"].get("available"):
+        logger.info(
+            "GPU: %s (%dMB total, %dMB safe budget)",
+            health["gpu"]["name"],
+            health["gpu"]["total_mb"],
+            health["gpu"]["safe_budget_mb"],
+        )
+    else:
+        logger.warning("No GPU available — local neural reconstruction will be unavailable")
+    logger.info("Outputs dir: %s", OUTPUTS_DIR)
+    yield
+
+
+app = FastAPI(title="LucidFrame", version="1.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -71,6 +92,13 @@ class WorldLabsSettingsInput(BaseModel):
     model: str = Field(default="marble-1.1", max_length=64)
 
 
+class GalleryDeleteInput(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=250)
+
+
+_SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
 def _require_loopback(request: Request) -> None:
     """Key configuration is intentionally available only from this computer."""
     host = request.client.host if request.client else ""
@@ -93,6 +121,11 @@ async def gallery():
     for f in OUTPUTS_DIR.rglob("*.splat"):
         relative = f.relative_to(OUTPUTS_DIR)
         if any(part.lower().startswith(("pano-smoke", "test")) for part in relative.parts):
+            continue
+        # One generated project can contain diagnostic/alternate .splat files.
+        # Present its canonical final only so React selection and deletion stay
+        # project-based instead of showing duplicate cards with the same ID.
+        if f.parent != OUTPUTS_DIR and f.name != "final.splat" and (f.parent / "final.splat").exists():
             continue
         job_id = f.parent.name if f.parent != OUTPUTS_DIR else f.stem
         manifest_path = f.parent / "world_manifest.json"
@@ -117,9 +150,69 @@ async def gallery():
     return {"splats": splats}
 
 
+def _project_directory(root: Path, job_id: str) -> Path:
+    """Resolve one project directory without allowing path traversal."""
+    if not _SAFE_JOB_ID.fullmatch(job_id):
+        raise HTTPException(status_code=422, detail=f"Invalid scene id: {job_id!r}")
+    resolved_root = root.resolve()
+    candidate = (resolved_root / job_id).resolve()
+    if candidate.parent != resolved_root:
+        raise HTTPException(status_code=422, detail="Scene id escaped the storage directory.")
+    return candidate
+
+
+def _directory_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(file.stat().st_size for file in path.rglob("*") if file.is_file())
+
+
+def _delete_gallery_projects(ids: list[str]) -> dict[str, Any]:
+    deleted: list[str] = []
+    missing: list[str] = []
+    freed_bytes = 0
+    for job_id in dict.fromkeys(ids):
+        output_dir = _project_directory(OUTPUTS_DIR, job_id)
+        upload_dir = _project_directory(UPLOADS_DIR, job_id)
+        standalone_splat = (OUTPUTS_DIR.resolve() / f"{job_id}.splat").resolve()
+        if standalone_splat.parent != OUTPUTS_DIR.resolve():
+            raise HTTPException(status_code=422, detail="Scene id escaped the storage directory.")
+        existed = output_dir.exists() or upload_dir.exists() or standalone_splat.is_file()
+        if not existed:
+            missing.append(job_id)
+            continue
+        freed_bytes += _directory_size(output_dir) + _directory_size(upload_dir)
+        if standalone_splat.is_file():
+            freed_bytes += standalone_splat.stat().st_size
+        if output_dir.exists():
+            shutil.rmtree(output_dir)
+        if upload_dir.exists():
+            shutil.rmtree(upload_dir)
+        if standalone_splat.is_file():
+            standalone_splat.unlink()
+        JOBS.pop(job_id, None)
+        deleted.append(job_id)
+    return {"deleted": deleted, "missing": missing, "freed_bytes": freed_bytes}
+
+
+@app.delete("/api/gallery/{job_id}")
+async def delete_gallery_project(job_id: str, request: Request):
+    """Delete one local scene and its source upload from this computer."""
+    _require_loopback(request)
+    return _delete_gallery_projects([job_id])
+
+
+@app.post("/api/gallery:delete")
+async def delete_gallery_projects(payload: GalleryDeleteInput, request: Request):
+    """Delete a validated batch of local scenes and report reclaimed bytes."""
+    _require_loopback(request)
+    return _delete_gallery_projects(payload.ids)
+
+
 @app.get("/api/providers")
 async def providers():
-    """Describe the three intentionally distinct creation paths."""
+    """Describe the intentionally distinct measured and generated creation paths."""
+    from cubediff_stage import is_available as cubediff_available
     from worldlabs_stage import settings_status
     worldlabs = settings_status()
     return {
@@ -130,6 +223,14 @@ async def providers():
             "description": "Apple SHARP metric Gaussians for high-detail nearby view synthesis.",
             "input": "one normal image",
             "license_note": "SHARP weights are non-commercial research only",
+        },
+        "local_world": {
+            "available": cubediff_available(),
+            "label": "Local Image to 360 Dream",
+            "estimated_time": "about 2 to 6 minutes depending on model cache state",
+            "description": "Joint six-face diffusion followed by depth-aligned SHARP-360 Gaussian reconstruction.",
+            "input": "one normal image",
+            "license_note": "OpenCubeDiff is an unofficial SD 1.5 reimplementation; SHARP weights are non-commercial research only",
         },
         "local_pano": {
             "available": True,
@@ -182,14 +283,26 @@ async def generate_world(
     image: UploadFile = File(...),
     provider: str = Form("local"),
     creative_direction: str = Form(""),
+    quality_profile: str = Form("balanced"),
 ):
     """
     Upload an image and start the LucidFrame pipeline.
     Returns a job_id that can be used to connect to the WebSocket.
     """
     provider = provider.lower().strip()
-    if provider not in {"local", "local_pano", "worldlabs"}:
+    if provider not in {"local", "local_world", "local_pano", "worldlabs"}:
         raise HTTPException(status_code=422, detail="Unknown generation mode.")
+    quality_profile = quality_profile.lower().strip()
+    if quality_profile not in {"balanced", "detail"}:
+        raise HTTPException(status_code=422, detail="Unknown reconstruction quality profile.")
+    if provider == "local_world":
+        from cubediff_stage import is_available as cubediff_available
+
+        if not cubediff_available():
+            raise HTTPException(
+                status_code=503,
+                detail="Local Image to 360 Dream needs OpenCubeDiff, py360convert, and CUDA. Run scripts/install_quality_models.ps1 first.",
+            )
     if provider == "worldlabs":
         from worldlabs_stage import is_configured, settings_status
         if not is_configured():
@@ -273,6 +386,7 @@ async def generate_world(
         "provider": provider,
         "creative_direction": creative_direction.strip()[:240],
         "worldlabs_model": worldlabs_model,
+        "quality_profile": quality_profile,
         "source_name": Path(image.filename or "Untitled").stem[:100],
     }
 
@@ -354,6 +468,26 @@ async def _run_pipeline(
     if job.get("provider") == "local_pano":
         await _run_local_panorama_pipeline(job_id, job, image_path, output_dir, progress)
         return
+    if job.get("provider") == "local_world":
+        await _run_local_world_pipeline(job_id, job, image_path, output_dir, progress)
+        return
+
+    restoration_report: dict[str, Any] = {"applied": False, "reason": "balanced profile"}
+    if job.get("quality_profile") == "detail":
+        await progress.stage_start("restoration", "Restoring a low-resolution source in padded local tiles...")
+        try:
+            from image_restoration_stage import restore_for_reconstruction
+
+            image_path, restoration_report = await asyncio.to_thread(
+                restore_for_reconstruction, image_path, output_dir
+            )
+            await progress.stage_done("restoration", restoration_report)
+        except Exception as exc:
+            logger.warning("Source restoration failed for %s: %s", job_id, exc)
+            await progress.warning("restoration", f"Source restoration was skipped: {exc}")
+            await progress.stage_done("restoration", {"applied": False, "reason": str(exc)})
+    else:
+        await progress.stage_done("restoration", restoration_report)
 
     # ── Stage 1a: VLM — Image Understanding ─────────────────────────────────
     await progress.stage_start("vlm", "Reading image composition locally...")
@@ -534,6 +668,8 @@ async def _run_pipeline(
         "artistic_contract": "The source frame is observed; occluded geometry is an artistic continuation, not ground truth.",
         "multiview_enabled": multiview_enabled,
         "difix_mode": difix_mode,
+        "quality_profile": job.get("quality_profile", "balanced"),
+        "source_restoration": restoration_report,
     }
     (output_dir / "world_manifest.json").write_text(json.dumps(manifest, indent=2))
     await progress.stage_done("compile", {"splat_url": splat_url, **manifest})
@@ -541,6 +677,163 @@ async def _run_pipeline(
     # ── Pipeline Complete ───────────────────────────────────────────────────
     await progress.pipeline_done(splat_url, manifest)
     logger.info("Pipeline complete for job %s → %s", job_id, splat_url)
+
+async def _run_local_world_pipeline(
+    job_id: str,
+    job: dict[str, Any],
+    image_path: Path,
+    output_dir: Path,
+    progress: ProgressBroadcaster,
+) -> None:
+    """Dream a full local panorama, then lift it into overlapping learned Gaussians."""
+    quality_profile = str(job.get("quality_profile") or "balanced")
+    restoration_report: dict[str, Any] = {"applied": False, "reason": "balanced profile"}
+    if quality_profile == "detail":
+        await progress.stage_start("restoration", "Restoring a low-resolution source before 360 generation...")
+        try:
+            from image_restoration_stage import restore_for_reconstruction
+
+            image_path, restoration_report = await asyncio.to_thread(
+                restore_for_reconstruction, image_path, output_dir
+            )
+        except Exception as exc:
+            logger.warning("Source restoration failed for generated world %s: %s", job_id, exc)
+            restoration_report = {"applied": False, "reason": str(exc)}
+            await progress.warning("restoration", f"Source restoration was skipped: {exc}")
+    await progress.stage_done("restoration", restoration_report)
+
+    await progress.stage_start("vlm", "Anchoring the uploaded frame as the observed direction...")
+    await progress.stage_done(
+        "vlm",
+        {"source": "local image", "observed_direction": "front", "privacy": "no third-party API"},
+    )
+    await progress.stage_start("llm", "Using image conditioning instead of a text-only scene guess...")
+    await progress.stage_done(
+        "llm",
+        {"prompt": "Image-only conditioning; the source pixels remain the front-face anchor."},
+    )
+
+    await progress.stage_start("multiview", "Dreaming six connected directions on the local GPU...")
+    await progress.stage_progress(
+        "multiview",
+        "Generating front, back, left, right, ceiling, and floor together...",
+    )
+    from cubediff_stage import generate_360_panorama, unload as unload_cubediff
+
+    try:
+        panorama_path, panorama_report = await asyncio.to_thread(
+            generate_360_panorama,
+            image_path,
+            output_dir,
+            quality_profile,
+        )
+    finally:
+        await asyncio.to_thread(unload_cubediff)
+    await progress.stage_done(
+        "multiview",
+        {
+            "view_count": 6,
+            "panorama_resolution": panorama_report.get("panorama_resolution"),
+            "elapsed_sec": panorama_report.get("elapsed_sec"),
+            "coverage": "generated full sphere",
+        },
+    )
+
+    await progress.stage_start(
+        "reconstruction",
+        "Lifting the generated sphere into depth-aligned Gaussian views...",
+    )
+    await progress.stage_progress(
+        "reconstruction",
+        "Estimating one shared panoramic depth field before SHARP face prediction...",
+    )
+    panorama_backend = "sharp360"
+    from panorama_spherical_stage import reconstruct_panorama
+
+    try:
+        from sharp360_wrapper import reconstruct_sharp360
+
+        gaussians = await asyncio.to_thread(
+            reconstruct_sharp360,
+            panorama_path,
+            output_dir,
+            quality_profile,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Generated-world SHARP-360 failed for %s: %s; using depth fallback",
+            job_id,
+            exc,
+        )
+        await progress.warning(
+            "reconstruction",
+            f"SHARP-360 unavailable; using aligned depth fallback: {exc}",
+        )
+        panorama_backend = "aligned_depth_fallback"
+        gaussians = await asyncio.to_thread(reconstruct_panorama, panorama_path, output_dir)
+    if gaussians.count == 0:
+        raise RuntimeError(f"Local 360 world reconstruction failed: {gaussians.errors}")
+    await progress.stage_done(
+        "reconstruction",
+        {
+            "gaussian_count": gaussians.count,
+            "backend": panorama_backend,
+            "coverage": "generated 360 angular coverage with learned nearby-view geometry",
+        },
+    )
+
+    from reconstruction_stage import unload as unload_recon
+
+    await asyncio.to_thread(unload_recon)
+    await progress.stage_start("stitch", "Validating face overlap, scale, and pole coverage...")
+    await progress.stage_done(
+        "stitch",
+        {
+            "mode": "joint cubemap plus depth-aligned overlapping Gaussian fields",
+            "backend": panorama_backend,
+        },
+    )
+    await progress.stage_done(
+        "difix",
+        {
+            "mode": "not-run",
+            "reason": "The six faces share one diffusion process; no independent API images are stitched.",
+        },
+    )
+
+    await progress.stage_start("compile", "Compiling the generated 360 Gaussian scene...")
+    from splat_compiler import compile_splat
+
+    splat_path = output_dir / "final.splat"
+    await asyncio.to_thread(compile_splat, gaussians, splat_path)
+    splat_url = f"/outputs/{job_id}/final.splat"
+    job["splat_url"] = splat_url
+    manifest = {
+        "renderer": "local-splat",
+        "provider": "local_world",
+        "source_name": job.get("source_name"),
+        "reconstruction": (
+            "OpenCubeDiff six-face panorama plus SPAG4D SHARP-360"
+            if panorama_backend == "sharp360"
+            else "OpenCubeDiff panorama plus aligned depth fallback"
+        ),
+        "reconstruction_model": panorama_backend,
+        "panorama_generator": panorama_report.get("model"),
+        "coverage": "generated full 360 sphere: front, back, left, right, ceiling, and floor",
+        "artistic_contract": "The uploaded front direction is observed. Every unseen direction and every occluded surface is a generated artistic hypothesis, not recovered ground truth.",
+        "translation_note": "Overlapping SHARP fields support nearby movement in every direction. Large translation can still expose surfaces absent from a single camera center.",
+        "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward for gsplat.js",
+        "quality_profile": quality_profile,
+        "source_restoration": restoration_report,
+        "generation_report": panorama_report,
+    }
+    (output_dir / "world_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    await progress.stage_done("compile", {"splat_url": splat_url, **manifest})
+    await progress.pipeline_done(splat_url, manifest)
+    logger.info("Local generated 360 pipeline complete for job %s", job_id)
+
 
 async def _run_local_panorama_pipeline(
     job_id: str,
@@ -556,6 +849,10 @@ async def _run_local_panorama_pipeline(
     with Image.open(image_path) as source:
         validate_panorama(*source.size)
 
+    await progress.stage_done(
+        "restoration",
+        {"applied": False, "reason": "panorama reconstruction preserves the uploaded ERP pixels"},
+    )
     await progress.stage_start("vlm", "Reading the panorama dimensions and projection locally...")
     await progress.stage_done("vlm", {"input_projection": "panoramic", "source": "local"})
     await progress.stage_start("llm", "Keeping the uploaded panorama as the color source...")
@@ -568,7 +865,12 @@ async def _run_local_panorama_pipeline(
         try:
             from sharp360_wrapper import reconstruct_sharp360
 
-            gaussians = await asyncio.to_thread(reconstruct_sharp360, image_path, output_dir)
+            gaussians = await asyncio.to_thread(
+                reconstruct_sharp360,
+                image_path,
+                output_dir,
+                str(job.get("quality_profile") or "balanced"),
+            )
         except Exception as exc:
             logger.warning("SHARP-360 failed for %s: %s; using spherical fallback", job_id, exc)
             await progress.warning("reconstruction", f"SHARP-360 unavailable; using depth fallback: {exc}")
@@ -603,8 +905,9 @@ async def _run_local_panorama_pipeline(
         "reconstruction_model": panorama_backend,
         "coverage": "horizontal 360 coverage for full/cropped panoramas; best-effort extension for partial panoramas",
         "artistic_contract": "One panorama observes one camera center. SHARP predicts local geometry, but hidden surfaces behind foreground objects are not measured.",
-        "translation_note": "Look-around is unrestricted; movement remains bounded to the reliable nearby-view volume.",
+        "translation_note": "Viewer free-flight is unrestricted. Raw local Gaussians do not include a collision mesh.",
         "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward for gsplat.js",
+        "quality_profile": job.get("quality_profile", "balanced"),
     }
     (output_dir / "world_manifest.json").write_text(json.dumps(manifest, indent=2))
     await progress.stage_done("compile", {"splat_url": splat_url, **manifest})
@@ -620,6 +923,10 @@ async def _run_worldlabs_pipeline(
     progress: ProgressBroadcaster,
 ) -> None:
     """Run the paid 360-degree branch without routing its SPZ output through the local renderer."""
+    await progress.stage_done(
+        "restoration",
+        {"applied": False, "reason": "the hosted provider receives the uploaded source directly"},
+    )
     await progress.stage_start("vlm", "Reading image composition before the world expands...")
     from vlm_stage import analyze_image
     analysis = await analyze_image(image_path)
@@ -671,22 +978,6 @@ async def _run_worldlabs_pipeline(
     await progress.pipeline_done("", manifest)
     logger.info("World Labs pipeline complete for job %s -> %s", job_id, result["world_url"])
 
-
-
-# ── Startup ─────────────────────────────────────────────────────────────────
-
-@app.on_event("startup")
-async def startup():
-    logger.info("LucidFrame backend starting up...")
-    health = get_health()
-    if health["gpu"].get("available"):
-        logger.info("GPU: %s (%dMB total, %dMB safe budget)",
-                     health["gpu"]["name"],
-                     health["gpu"]["total_mb"],
-                     health["gpu"]["safe_budget_mb"])
-    else:
-        logger.warning("No GPU available — pipeline will fail on diffusion stages")
-    logger.info("Outputs dir: %s", OUTPUTS_DIR)
 
 
 if __name__ == "__main__":

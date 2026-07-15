@@ -13,6 +13,13 @@ venv/
 # Backend runtime
 backend/uploads/
 backend/outputs/
+**/server.stdout.log
+**/server.stderr.log
+**/*.stdout.log
+**/*.stderr.log
+
+# Optional research/model sources installed by setup scripts
+external/
 
 # Node
 node_modules/

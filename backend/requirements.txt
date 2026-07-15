@@ -31,3 +31,5 @@ torchmetrics>=1.0.0
 termcolor>=2.0.0
 omegaconf>=2.3.0
 mmengine>=0.10.0
+spandrel>=0.4.2,<0.5
+py360convert>=1.0.4,<2

@@ -6,7 +6,8 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 const WS_BASE = API_BASE.replace("http://", "ws://").replace("https://", "wss://");
 
-export type PipelineProvider = "local" | "local_pano" | "worldlabs";
+export type PipelineProvider = "local" | "local_world" | "local_pano" | "worldlabs";
+export type QualityProfile = "balanced" | "detail";
 
 export interface GenerateWorldResponse {
   job_id: string;
@@ -42,11 +43,13 @@ export async function generateWorld(
   image: File,
   provider: PipelineProvider = "local",
   creativeDirection = "",
+  qualityProfile: QualityProfile = "balanced",
 ): Promise<GenerateWorldResponse> {
   const formData = new FormData();
   formData.append("image", image);
   formData.append("provider", provider);
   formData.append("creative_direction", creativeDirection);
+  formData.append("quality_profile", qualityProfile);
 
   const res = await fetch(`${API_BASE}/api/generate-world`, {
     method: "POST",
@@ -176,6 +179,7 @@ export type PipelineEventType =
   | "warning";
 
 export type PipelineStage =
+  | "restoration"
   | "vlm"
   | "llm"
   | "multiview"
@@ -200,6 +204,7 @@ export interface PipelineEvent {
 }
 
 export const STAGE_ORDER: PipelineStage[] = [
+  "restoration",
   "vlm",
   "llm",
   "multiview",
@@ -210,6 +215,7 @@ export const STAGE_ORDER: PipelineStage[] = [
 ];
 
 export const STAGE_LABELS: Record<PipelineStage, string> = {
+  restoration: "Source Restoration",
   vlm: "Image Composition",
   llm: "Dream Direction",
   multiview: "Scene Input",
@@ -243,4 +249,29 @@ export async function getGallery(): Promise<GallerySplat[]> {
   } catch {
     return [];
   }
+}
+
+export interface DeleteGalleryResult {
+  deleted: string[];
+  missing: string[];
+  freed_bytes: number;
+}
+
+export async function deleteGalleryProjects(ids: string[]): Promise<DeleteGalleryResult> {
+  const safeIds = Array.from(new Set(ids.filter(Boolean)));
+  if (safeIds.length === 0) return { deleted: [], missing: [], freed_bytes: 0 };
+  const res = await fetch(`${API_BASE}/api/gallery:delete`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids: safeIds }),
+  });
+  if (!res.ok) {
+    let detail = "The selected scenes could not be deleted.";
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
 }
