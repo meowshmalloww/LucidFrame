@@ -54,7 +54,7 @@ This directly emphasizes the published judging priorities: originality through a
 - **SPAG4D SHARP-360** — MIT-licensed panorama alignment/merge code using the SHARP predictor.
 - **OpenCubeDiff** — MIT-licensed unofficial CubeDiff implementation used for local, jointly conditioned six-face panorama generation.
 - **Depth Anything V2** — local panorama depth alignment and automatic fallback reconstruction.
-- **gsplat.js** — real-time browser rendering of Gaussian splats.
+- **World Labs Spark 2.1 + Three.js** — real-time local WebGL2 rendering of Gaussian splats.
 - **World Labs** — optional hosted API mode using a visitor-supplied key and credits.
 
 ## Useful links

@@ -415,7 +415,7 @@ def reconstruct_panorama(image_path: str | Path, output_dir: Path) -> GaussianDa
         opacities = opacities[chosen]
         sampled_rays = sampled_rays[chosen]
 
-    # gsplat.js uses camera/image coordinates (X right, Y down, Z forward).
+    # The browser camera uses image coordinates (X right, Y down, Z forward).
     # The reconstruction above stays Y-up for spherical depth alignment, then
     # performs one explicit export conversion so the browser view is upright.
     positions[:, 1] *= -1.0
@@ -452,7 +452,7 @@ def reconstruct_panorama(image_path: str | Path, output_dir: Path) -> GaussianDa
                 "source_height": source_h,
                 "normalised_width": erp_w,
                 "normalised_height": erp_h,
-                "orientation": "aligned internally in Y-up; exported X-right, Y-down, Z-forward for gsplat.js",
+                "orientation": "aligned internally in Y-up; exported X-right, Y-down, Z-forward browser camera coordinates",
             },
             indent=2,
         ),

@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import {
   generateWorld,
   getProviders,
+  SPLAT_URL_BASE,
   type PipelineProvider,
   type ProviderStatus,
   type QualityProfile,
+  type SourceProfile,
 } from "@/lib/api";
 
 type ImageInfo = { width: number; height: number; ratio: number };
@@ -16,36 +18,31 @@ const modes: Array<{
   id: PipelineProvider;
   title: string;
   meta: string;
-  description: string;
-  icon: "frame" | "pano" | "cloud";
+  icon: "depth" | "world" | "panorama" | "marble";
 }> = [
   {
     id: "local",
     title: "Image to 3D",
     meta: "On this computer",
-    description: "Create an explorable scene from one photo.",
-    icon: "frame",
+    icon: "depth",
   },
   {
     id: "local_world",
     title: "Image to 360",
-    meta: "On this computer · Slowest",
-    description: "Generate and connect every direction around one photo.",
-    icon: "pano",
+    meta: "On this computer · Experimental",
+    icon: "world",
   },
   {
     id: "local_pano",
     title: "Panorama to 360",
     meta: "On this computer",
-    description: "Turn a wide or equirectangular image into a scene.",
-    icon: "pano",
+    icon: "panorama",
   },
   {
     id: "worldlabs",
     title: "World Labs",
     meta: "Hosted · Uses credits",
-    description: "Create a Marble world from one image.",
-    icon: "cloud",
+    icon: "marble",
   },
 ];
 
@@ -58,6 +55,7 @@ export function ArtHome() {
   const [dragging, setDragging] = useState(false);
   const [mode, setMode] = useState<PipelineProvider>("local");
   const [qualityProfile, setQualityProfile] = useState<QualityProfile>("detail");
+  const [sourceProfile, setSourceProfile] = useState<SourceProfile>("artwork");
   const [providers, setProviders] = useState<Partial<Record<PipelineProvider, ProviderStatus>>>({});
   const [backendReady, setBackendReady] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -136,11 +134,12 @@ export function ArtHome() {
     setStarting(true);
     setError(null);
     try {
-      const result = await generateWorld(selected, mode, "", qualityProfile);
+      const result = await generateWorld(selected, mode, "", qualityProfile, sourceProfile);
       sessionStorage.setItem("lucidframe-job-id", result.job_id);
       sessionStorage.setItem("lucidframe-project-name", selected.name.replace(/\.[^.]+$/, ""));
       sessionStorage.setItem("lucidframe-provider", mode);
-      if (preview) sessionStorage.setItem("lucidframe-source-preview", preview);
+      sessionStorage.setItem("lucidframe-source-preview", SPLAT_URL_BASE + result.source_url);
+      sessionStorage.setItem("lucidframe-source-profile", sourceProfile);
       sessionStorage.removeItem("lucidframe-splat-url");
       router.push("/workspace");
     } catch (caught) {
@@ -149,7 +148,7 @@ export function ArtHome() {
     } finally {
       setStarting(false);
     }
-  }, [backendReady, mode, preview, providers.worldlabs?.available, providers.worldlabs?.estimate_label, qualityProfile, router, selected, starting]);
+  }, [backendReady, mode, providers.worldlabs?.available, providers.worldlabs?.estimate_label, qualityProfile, router, selected, sourceProfile, starting]);
 
   const panoProfile = describePanorama(imageInfo);
   const canBegin = Boolean(selected) && !starting && backendReady === true;
@@ -157,9 +156,9 @@ export function ArtHome() {
   return (
     <div className="h-full overflow-y-auto bg-[#f3f2ec] text-[#1b1b18]">
       <div className="mx-auto w-full max-w-[1320px] px-6 py-8 lg:px-10 lg:py-11">
-        <header className="border-b border-[#d5d3ca] pb-7">
-          <h1 className="text-[clamp(2rem,4vw,3.25rem)] font-medium leading-none tracking-[-0.045em]">Create a scene</h1>
-          <p className="mt-3 text-sm leading-6 text-[#686760]">Choose an image, then select how you want to build it.</p>
+        <header className="border-b border-[#d5d3ca] pb-6">
+          <h1 className="text-[clamp(2rem,4vw,3.1rem)] font-medium leading-none tracking-[-0.045em]">New scene</h1>
+          <p className="mt-3 text-sm text-[#686760]">Upload an image and choose a method.</p>
         </header>
 
         <section className="mt-8 grid gap-7 lg:grid-cols-[minmax(0,1fr)_360px]">
@@ -225,13 +224,12 @@ export function ArtHome() {
             </div>
           </div>
 
-          <aside className="self-start rounded-[10px] border border-[#d1cfc5] bg-[#faf9f5] p-5">
-            <div className="border-b border-[#dedcd3] pb-4">
+          <aside className="self-start border-t border-[#d1cfc5] pt-5 lg:border-l lg:border-t-0 lg:pl-7 lg:pt-0">
+            <div className="border-b border-[#dedcd3] pb-3">
               <h2 className="text-sm font-semibold">Method</h2>
-              <p className="mt-1.5 text-xs leading-5 text-[#686760]">Choose the option that matches your image.</p>
             </div>
 
-            <div className="mt-4 grid gap-2">
+            <div className="divide-y divide-[#dedcd3]">
               {modes.map((item) => (
                 <ModeChoice
                   key={item.id}
@@ -240,7 +238,7 @@ export function ArtHome() {
                   available={providers[item.id]?.available !== false}
                   onClick={() => {
                     setMode(item.id);
-                    setQualityProfile(item.id === "local" ? "detail" : "balanced");
+                    setQualityProfile(item.id === "worldlabs" ? "balanced" : "detail");
                     setError(null);
                   }}
                 />
@@ -248,6 +246,11 @@ export function ArtHome() {
             </div>
 
             {mode === "local_pano" && <p className="mt-4 text-xs leading-5 text-[#686760]">{panoProfile}</p>}
+            {mode === "local_world" && (
+              <p className="mt-4 text-xs leading-5 text-[#686760]">
+                The uploaded view stays the anchor. Unseen directions are generated locally and may be softer or less consistent.
+              </p>
+            )}
             {mode === "worldlabs" && (
               <p className="mt-4 text-xs leading-5 text-[#686760]">
                 {providers.worldlabs?.available ? (providers.worldlabs.estimate_label || "World Labs is connected.") : "Add an API key in Settings before using this option."}
@@ -255,6 +258,24 @@ export function ArtHome() {
             )}
 
             {mode !== "worldlabs" && (
+              <>
+              <fieldset className="mt-5 border-t border-[#dedcd3] pt-4">
+                <legend className="text-xs font-semibold text-[#4f4e48]">Source</legend>
+                <div className="mt-3 grid grid-cols-2 gap-2">
+                  <QualityChoice
+                    active={sourceProfile === "artwork"}
+                    title="Artwork"
+                    note="Preserve brush and paper texture"
+                    onClick={() => setSourceProfile("artwork")}
+                  />
+                  <QualityChoice
+                    active={sourceProfile === "photo"}
+                    title="Photo"
+                    note="Reduce camera noise and compression"
+                    onClick={() => setSourceProfile("photo")}
+                  />
+                </div>
+              </fieldset>
               <fieldset className="mt-5 border-t border-[#dedcd3] pt-4">
                 <legend className="text-xs font-semibold text-[#4f4e48]">Quality</legend>
                 <div className="mt-3 grid grid-cols-2 gap-2">
@@ -279,6 +300,7 @@ export function ArtHome() {
                     : "Detail restores small source images before reconstruction."}
                 </p>
               </fieldset>
+              </>
             )}
 
             {backendReady === false && (
@@ -357,8 +379,8 @@ function ModeChoice({
       disabled={!available}
       onClick={onClick}
       className={[
-        "grid w-full grid-cols-[34px_1fr] gap-3 rounded-[9px] border p-3.5 text-left transition disabled:cursor-not-allowed disabled:opacity-55",
-        active ? "border-[#315c4a] bg-[#edf2ee]" : "border-[#dedcd3] bg-white hover:border-[#aaa89e]",
+        "grid w-full grid-cols-[38px_1fr] gap-3 border-l-2 px-3 py-3.5 text-left transition disabled:cursor-not-allowed disabled:opacity-55",
+        active ? "border-l-[#315c4a] bg-[#e9eee9]" : "border-l-transparent hover:bg-[#eceae2]",
       ].join(" ")}
     >
       <ModeIcon type={item.icon} />
@@ -367,21 +389,24 @@ function ModeChoice({
           <span className="text-sm font-semibold text-[#24241f]">{item.title}</span>
           {!available && <span className="text-[11px] text-[#8d5f26]">{item.id === "worldlabs" ? "Needs API key" : "Not installed"}</span>}
         </span>
-        <span className="mt-0.5 block text-[11px] text-[#77766f]">{item.meta}</span>
-        <span className="mt-1.5 block text-xs leading-5 text-[#686760]">{item.description}</span>
+        <span className="mt-1 block text-[11px] text-[#77766f]">{item.meta}</span>
       </span>
     </button>
   );
 }
 
-function ModeIcon({ type }: { type: "frame" | "pano" | "cloud" }) {
-  if (type === "pano") {
-    return <svg viewBox="0 0 32 32" className="h-8 w-8 fill-none stroke-[#3f5148] stroke-[1.35]" aria-hidden><ellipse cx="16" cy="16" rx="13" ry="7" /><path d="M3 16h26M16 9c3 2 4 4 4 7s-1 5-4 7M16 9c-3 2-4 4-4 7s1 5 4 7" /></svg>;
+function ModeIcon({ type }: { type: "depth" | "world" | "panorama" | "marble" }) {
+  const className = "h-8 w-8 fill-none stroke-[#3f5148] stroke-[1.35]";
+  if (type === "world") {
+    return <svg viewBox="0 0 32 32" className={className} aria-hidden><rect x="4" y="7" width="16" height="13" rx="1" /><path d="m7 17 4-4 3 3 3-2 2 3M23 10a9 9 0 0 1 1 13M21 26l3-3-3-3M8 23a9 9 0 0 0 8 4" /></svg>;
   }
-  if (type === "cloud") {
-    return <svg viewBox="0 0 32 32" className="h-8 w-8 fill-none stroke-[#3f5148] stroke-[1.35]" aria-hidden><path d="M9 24h14a6 6 0 0 0 1-11.9A8 8 0 0 0 9.2 9.5 5.5 5.5 0 0 0 9 24Z" /><path d="M16 13v8M12.5 16.5 16 13l3.5 3.5" /></svg>;
+  if (type === "panorama") {
+    return <svg viewBox="0 0 32 32" className={className} aria-hidden><path d="M3 10c7-3 19-3 26 0v12c-7 3-19 3-26 0V10Z" /><path d="M3 10c4 3 4 9 0 12M29 10c-4 3-4 9 0 12M7 19l5-5 4 4 3-3 6 5" /></svg>;
   }
-  return <svg viewBox="0 0 32 32" className="h-8 w-8 fill-none stroke-[#3f5148] stroke-[1.35]" aria-hidden><rect x="5" y="6" width="22" height="20" rx="1.5" /><path d="m8 22 6-7 5 5 3-3 3 5" /></svg>;
+  if (type === "marble") {
+    return <svg viewBox="0 0 32 32" className={className} aria-hidden><path d="m16 3 11 6v14l-11 6-11-6V9l11-6Z" /><path d="m5 9 11 6 11-6M16 15v14M10 6l12 20M22 6 10 26" /></svg>;
+  }
+  return <svg viewBox="0 0 32 32" className={className} aria-hidden><path d="M4 8h18v16H4z" /><path d="m7 20 5-6 4 4 3-2 2 4M22 11l6-3v16l-6-3M25 10v12" /></svg>;
 }
 
 function QualityChoice({

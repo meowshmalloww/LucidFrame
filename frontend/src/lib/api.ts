@@ -8,10 +8,27 @@ const WS_BASE = API_BASE.replace("http://", "ws://").replace("https://", "wss://
 
 export type PipelineProvider = "local" | "local_world" | "local_pano" | "worldlabs";
 export type QualityProfile = "balanced" | "detail";
+export type SourceProfile = "artwork" | "photo";
+
+export interface SceneCameraMetadata {
+  horizontal_fov_deg: number;
+  focal_px: number;
+  move_speed_mps: number;
+  near_depth_m?: number;
+  recommended_lateral_m?: number;
+  recommended_forward_m?: number;
+}
+
+export interface SceneMetadata {
+  camera?: SceneCameraMetadata | null;
+  coverage?: string;
+  provider?: PipelineProvider;
+}
 
 export interface GenerateWorldResponse {
   job_id: string;
   provider: PipelineProvider;
+  source_url: string;
 }
 
 export interface HealthResponse {
@@ -44,12 +61,14 @@ export async function generateWorld(
   provider: PipelineProvider = "local",
   creativeDirection = "",
   qualityProfile: QualityProfile = "balanced",
+  sourceProfile: SourceProfile = "artwork",
 ): Promise<GenerateWorldResponse> {
   const formData = new FormData();
   formData.append("image", image);
   formData.append("provider", provider);
   formData.append("creative_direction", creativeDirection);
   formData.append("quality_profile", qualityProfile);
+  formData.append("source_profile", sourceProfile);
 
   const res = await fetch(`${API_BASE}/api/generate-world`, {
     method: "POST",
@@ -237,7 +256,19 @@ export interface GallerySplat {
   source_url?: string | null;
   provider?: PipelineProvider;
   coverage?: string;
+  camera?: SceneCameraMetadata | null;
   created_at?: number;
+}
+
+export async function getSceneMetadata(jobId: string): Promise<SceneMetadata | null> {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(jobId)) return null;
+  try {
+    const res = await fetch(`${API_BASE}/api/scenes/${encodeURIComponent(jobId)}`);
+    if (!res.ok) return null;
+    return res.json();
+  } catch {
+    return null;
+  }
 }
 
 export async function getGallery(): Promise<GallerySplat[]> {

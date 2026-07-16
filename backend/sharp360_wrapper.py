@@ -50,7 +50,9 @@ def _spherical_latitude_mask(means, total_vertical_degrees: float):
 
 def _profile_target_width(quality_profile: str) -> int:
     """Resolve ERP inference width, allowing an explicit numeric override."""
-    default = 2048 if quality_profile == "detail" else 1536
+    # Detail retains more measured panorama pixels before the fixed-resolution
+    # SHARP face crops are sampled. Balanced stays at 2K for lower peak memory.
+    default = 2560 if quality_profile == "detail" else 2048
     configured = os.getenv("SHARP360_ERP_WIDTH", "auto").strip().lower()
     if configured in {"", "auto"}:
         value = default
@@ -115,9 +117,9 @@ def _build_coverage_guard(
     """
     height, width = panorama.shape[:2]
     try:
-        max_points = int(os.getenv("SHARP360_GUARD_MAX_POINTS", "180000"))
+        max_points = int(os.getenv("SHARP360_GUARD_MAX_POINTS", "260000"))
     except ValueError:
-        max_points = 180000
+        max_points = 260000
     max_points = max(50000, min(350000, max_points))
     stride = max(1, int(np.ceil(np.sqrt((height * width) / max_points))))
 
@@ -145,16 +147,19 @@ def _build_coverage_guard(
     latitude_cos = np.sqrt(np.clip(1.0 - rays[:, 1] ** 2, 0.0, 1.0))
     dtheta = 2.0 * np.pi * stride / width
     dphi = np.pi * stride / height
-    scale_right = sampled_depth * dtheta * np.maximum(latitude_cos, 0.18) * 1.85
-    scale_up = sampled_depth * dphi * 1.85
+    # A denser underlay needs less per-splat dilation. This keeps residual
+    # coverage while avoiding the soft, oversized cards that become visible
+    # during translation.
+    scale_right = sampled_depth * dtheta * np.maximum(latitude_cos, 0.18) * 1.38
+    scale_up = sampled_depth * dphi * 1.38
     scale_normal = np.minimum(scale_right, scale_up) * 0.25
     linear_scales = np.stack([scale_right, scale_up, scale_normal], axis=1)
     linear_scales = np.clip(linear_scales, 0.002, 0.12).astype(np.float32)
 
-    # Export in gsplat.js's X-right/Y-down/Z-forward camera convention.
+    # Export in the browser's X-right/Y-down/Z-forward camera convention.
     positions[:, 1] *= -1.0
     rays[:, 1] *= -1.0
-    opacity = float(os.getenv("SHARP360_GUARD_OPACITY", "0.94"))
+    opacity = float(os.getenv("SHARP360_GUARD_OPACITY", "0.88"))
     opacity = max(0.5, min(0.99, opacity))
     return GaussianData(
         positions=positions,

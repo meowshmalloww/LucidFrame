@@ -30,8 +30,8 @@ python -m pip install -e $cubeDiffDir --no-deps
 Write-Host "Downloading the official SHARP checkpoint into the PyTorch cache..."
 python -c "import torch; from sharp.cli.predict import DEFAULT_MODEL_URL; torch.hub.load_state_dict_from_url(DEFAULT_MODEL_URL, progress=True)"
 
-Write-Host "Downloading the optional weak-denoise Real-ESRGAN restoration checkpoint..."
-python -c "from pathlib import Path; import torch; url='https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-wdn-x4v3.pth'; p=Path(torch.hub.get_dir())/'checkpoints'/'realesr-general-wdn-x4v3.pth'; p.parent.mkdir(parents=True, exist_ok=True); torch.hub.download_url_to_file(url, str(p), progress=True) if not p.exists() else None"
+Write-Host "Downloading the compact Real-ESRGAN strong/weak denoise checkpoints..."
+python -c "from pathlib import Path; import torch; base='https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/'; names=['realesr-general-x4v3.pth','realesr-general-wdn-x4v3.pth']; root=Path(torch.hub.get_dir())/'checkpoints'; root.mkdir(parents=True, exist_ok=True); [(torch.hub.download_url_to_file(base+n, str(root/n), progress=True) if not (root/n).exists() else None) for n in names]"
 
 Write-Host "Downloading the 4.3 GB local OpenCubeDiff image-conditioned checkpoint..."
 python -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='hlicai/cubediff-512-imgonly')"

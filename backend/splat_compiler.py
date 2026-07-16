@@ -1,7 +1,7 @@
 """
 Splat Compiler — Convert Gaussian parameters to binary .splat format.
 
-The .splat format is a flat binary array used by gsplat.js.
+The .splat format is a flat binary array supported by the browser renderer.
 Each Gaussian occupies 32 bytes:
   - Position: x, y, z (float32 × 3 = 12 bytes)
   - Scale: sx, sy, sz (float32 × 3 = 12 bytes)
@@ -51,7 +51,7 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
     # broad wall/background axes (the released model reaches roughly 0.85 m on
     # our regression scene); the former 10 cm ceiling flattened those surfaces
     # and opened pinholes in the web render. Keep only an outlier guard here.
-    max_scale = float(os.getenv("SPLAT_MAX_SCALE", "1.00"))
+    max_scale = float(os.getenv("SPLAT_MAX_SCALE", "2.00"))
     max_scale = min(max(max_scale, 0.02), 2.00)
     clipped = int(np.count_nonzero((scales < 0.00005) | (scales > max_scale)))
     scales = np.clip(scales, 0.00005, max_scale)
@@ -78,7 +78,7 @@ def compile_splat(gaussians: GaussianData, output_path: Path) -> Path:
     norms = np.linalg.norm(rotations, axis=1, keepdims=True)
     norms = np.where(norms > 0, norms, 1.0)
     rotations = rotations / norms
-    # Map from [-1, 1] to gsplat.js signed-byte encoding.
+    # Map from [-1, 1] to the standard .splat signed-byte encoding.
     rotations_u8 = np.clip(rotations * 128.0 + 128.0, 0, 255).astype(np.uint8)
 
     # Combine RGBA

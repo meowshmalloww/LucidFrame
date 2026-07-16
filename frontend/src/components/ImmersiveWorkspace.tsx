@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import SplatViewer, { type SplatRenderQuality, type SplatViewerHandle } from "@/components/SplatViewer";
 import { GenerationProgress } from "@/components/GenerationProgress";
-import { SPLAT_URL_BASE } from "@/lib/api";
+import { getSceneMetadata, SPLAT_URL_BASE, type SceneCameraMetadata } from "@/lib/api";
 import { usePipeline } from "@/lib/usePipeline";
 
 type Provider = "local" | "local_world" | "local_pano" | "worldlabs";
@@ -19,31 +19,46 @@ export function ImmersiveWorkspace() {
   const [sessionSplat, setSessionSplat] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [provider, setProvider] = useState<Provider>("local");
+  const [sourcePreview, setSourcePreview] = useState<string | null>(null);
+  const [sceneCamera, setSceneCamera] = useState<SceneCameraMetadata | null>(null);
 
   useEffect(() => {
-    const jobId = sessionStorage.getItem("lucidframe-job-id");
-    const queryMode = new URLSearchParams(window.location.search).get("mode");
-    const querySplat = new URLSearchParams(window.location.search).get("splat");
+    const query = new URLSearchParams(window.location.search);
+    const queryMode = query.get("mode");
+    const querySplat = query.get("splat");
+    const rawQueryJob = query.get("job");
+    const queryJob = rawQueryJob && /^[A-Za-z0-9_-]{1,64}$/.test(rawQueryJob) ? rawQueryJob : null;
+    const queryProvider = query.get("provider");
+    const jobId = queryJob || sessionStorage.getItem("lucidframe-job-id");
     const safeQuerySplat = querySplat?.startsWith("/outputs/") && querySplat.endsWith(".splat") ? querySplat : null;
-    const storedSplat = safeQuerySplat || sessionStorage.getItem("lucidframe-splat-url");
-    const storedName = sessionStorage.getItem("lucidframe-project-name") || sessionStorage.getItem("lucidframe-splat-name");
-    const storedProvider = sessionStorage.getItem("lucidframe-provider");
+    const storedSplat = safeQuerySplat || (queryJob ? null : sessionStorage.getItem("lucidframe-splat-url"));
+    const storedName = queryJob
+      ? null
+      : sessionStorage.getItem("lucidframe-project-name") || sessionStorage.getItem("lucidframe-splat-name");
+    const storedProvider = queryProvider || sessionStorage.getItem("lucidframe-provider");
+    const storedSourcePreview = queryJob
+      ? `${SPLAT_URL_BASE}/uploads/${queryJob}/input.png`
+      : sessionStorage.getItem("lucidframe-source-preview");
 
     if (safeQuerySplat && queryMode === "panorama") {
       setProvider("local_pano");
+      setRenderQuality("standard");
     } else if (safeQuerySplat && queryMode === "image") {
       setProvider("local");
+      setRenderQuality("high");
     } else if (storedProvider === "local" || storedProvider === "local_world" || storedProvider === "local_pano" || storedProvider === "worldlabs") {
       setProvider(storedProvider);
+      setRenderQuality(storedProvider === "local" ? "high" : "standard");
     }
     if (storedName) setProjectName(storedName);
+    if (storedSourcePreview) setSourcePreview(storedSourcePreview);
     if (safeQuerySplat) setProjectName("Local scene preview");
     if (storedSplat) setSessionSplat(storedSplat);
 
     if (safeQuerySplat && !state.splatUrl && !state.isRunning) {
       loadSplat(safeQuerySplat);
     } else if (jobId && !state.splatUrl && !state.isRunning) {
-      sessionStorage.removeItem("lucidframe-job-id");
+      if (!queryJob) sessionStorage.removeItem("lucidframe-job-id");
       connect(jobId);
     } else if (storedSplat && !state.splatUrl && !state.isRunning) {
       loadSplat(storedSplat);
@@ -62,6 +77,25 @@ export function ImmersiveWorkspace() {
   const worldUrl = state.worldUrl;
   const isPanorama = provider === "local_pano" || provider === "local_world";
   const empty = !splatUrl && !state.isRunning && !state.error && !worldUrl;
+
+  useEffect(() => {
+    if (!splatUrl || isPanorama) {
+      setSceneCamera(null);
+      return;
+    }
+    const match = splatUrl.match(/\/outputs\/([A-Za-z0-9_-]{1,64})\/final\.splat(?:[?#]|$)/);
+    if (!match) {
+      setSceneCamera(null);
+      return;
+    }
+    let cancelled = false;
+    void getSceneMetadata(match[1]).then((metadata) => {
+      if (!cancelled) setSceneCamera(metadata?.camera || null);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isPanorama, splatUrl]);
 
   if (worldUrl) {
     return <WorldLabsHandoff name={projectName} url={worldUrl} onBack={() => router.push("/")} />;
@@ -105,11 +139,14 @@ export function ImmersiveWorkspace() {
               mode={cameraMode}
               sceneMode={isPanorama ? "panorama" : "image"}
               renderQuality={renderQuality}
+              cameraCalibration={sceneCamera}
             />
           )}
         </div>
 
-        {state.isRunning && !splatUrl && <GenerationProgress state={state} />}
+        {state.isRunning && !splatUrl && (
+          <GenerationProgress state={state} sourcePreview={sourcePreview} provider={provider} />
+        )}
 
         {state.error && (
           <div role="alert" className="absolute bottom-24 left-1/2 z-30 w-[min(36rem,calc(100%-3rem))] -translate-x-1/2 rounded-[9px] border border-[#b55b54] bg-[#f8e9e7] p-4 text-sm text-[#7e302b] shadow-xl">
@@ -139,7 +176,7 @@ export function ImmersiveWorkspace() {
             <button
               type="button"
               aria-pressed={renderQuality === "high"}
-              title="Supersample the viewport and gently widen only subpixel Gaussian footprints. The scene data is unchanged."
+              title="Increase viewport resolution and Gaussian tail coverage. The saved scene is unchanged."
               onClick={() => setRenderQuality((current) => current === "high" ? "standard" : "high")}
               className={renderQuality === "high" ? "rounded-[6px] bg-white px-3 py-2 text-xs font-semibold text-[#1b1b18]" : "rounded-[6px] px-3 py-2 text-xs text-white/65 hover:text-white"}
             >
@@ -163,7 +200,7 @@ export function ImmersiveWorkspace() {
               <Row label="Method" value={methodLabel(provider)} />
               <Row label="Splats" value={state.gaussianCount?.toLocaleString() || "Loaded from file"} />
               <Row label="View" value={isPanorama ? "360°" : "Source image"} />
-              <Row label="Movement" value="Unrestricted" />
+              <Row label="Movement" value={isPanorama ? "Free flight" : "Scene-scaled nearby view"} />
               <Row label="Rendering" value={renderQuality === "high" ? "HD" : "Standard"} />
             </dl>
           </aside>

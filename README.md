@@ -17,9 +17,11 @@ This is real Gaussian reconstruction, not a panorama textured onto a sphere. The
 
 One photograph cannot recover surfaces it never sees. Direct SHARP gives strong nearby parallax but does not create a back side. Image to 360 Dream generates that missing sphere as an artistic hypothesis; overlapping SHARP fields make every direction navigable near the shared camera center, but deeply occluded surfaces can still thin out under large translation.
 
-Splatting also does not make a low-detail upload magically sharp. Detail mode now applies a conservative, weak-denoise Real-ESRGAN restoration pass to small inputs, but source blur and compression still limit recoverable texture and no restorer can recover factual unseen detail.
+Splatting also does not make a low-detail upload magically sharp. Detail mode offers two explicit source treatments. **Artwork** uses low-denoise, low-blend Real-ESRGAN enlargement and skips rewriting paintings that already meet an 800-pixel short-edge target, preserving intentional brush, paper, and canvas texture. **Photo** keeps the stronger compression/noise cleanup. Source blur still limits recoverable texture, and no restorer can recover factual unseen detail.
 
-The workspace keeps the original `gsplat.js` rasterization as its Standard default. **HD render** is an optional, instant presentation pass: it modestly supersamples the WebGL drawing buffer and raises only the subpixel Gaussian footprint from the reference `0.3 px²` to `0.45 px²`, with determinant-based opacity compensation to avoid brightening the enlarged footprint. This can make tiny splats and narrow screen-space gaps less visible, but it does not invent Gaussians, repair missing geometry, or change the saved `.splat` file. Switch it off whenever the original look or a higher frame rate is preferable.
+The local Image to 360 path is experimental. Its installed OpenCubeDiff checkpoint conditions six 512-pixel faces, so a 2048×1024 export does not contain native 2K detail in every direction. More Gaussian points cannot repair a blurry or inconsistent generated back side; the uploaded front is observed and every other direction is an artistic continuation.
+
+The workspace renders with World Labs Spark 2.1. Its radial ordering keeps translucent splats steadier during rotation, and its documented `0.3` covariance pre-filter removes the dark subpixel lattice that appeared in the previous viewport. **HD render** is an optional presentation pass that raises the drawing-buffer resolution and extends Gaussian tails from √8σ to 3σ. It does not add geometry, repair an unseen surface, or modify the saved `.splat` file.
 
 Apple's released SHARP weights are licensed for non-commercial research use. That is suitable for a hackathon prototype, but a commercial release needs a differently licensed model or permission from Apple. SPAG4D's core code is MIT-licensed.
 
@@ -62,14 +64,14 @@ The quality paths are defaults; no `.env` is required.
 ```dotenv
 RECONSTRUCTION_MODEL=sharp
 PANORAMA_RECONSTRUCTION_MODEL=sharp360
-SHARP360_ERP_WIDTH=auto        # Balanced 1536; Detail 2048
+SHARP360_ERP_WIDTH=auto        # 2048 in both profiles; Detail adds more views
 SHARP360_SIDE_COUNT=auto       # Balanced 4; Detail 6 overlapping horizon views
 SHARP360_INCLUDE_CAPS=auto
 SHARP360_TARGET_RADIUS=4.0
 CUBEDIFF_STEPS_BALANCED=24
 CUBEDIFF_STEPS_DETAIL=40
 CUBEDIFF_CFG_SCALE=3.0
-SPLAT_MAX_SCALE=1.00
+SPLAT_MAX_SCALE=2.00
 
 VLM_PROVIDER=offline
 LLM_PROVIDER=offline
@@ -82,6 +84,10 @@ ENABLE_DEMO_FALLBACK=off
 
 On the development RTX 4080 Laptop GPU:
 
+- 1015×831 Monet painting in Artwork + Detail → restoration correctly skipped, 1,177,194 valid SHARP Gaussians, 37.67 MB `.splat`, and 9.2 seconds of reconstruction. Its measured 58.32° horizontal field of view and valid 100–420 m sky support are preserved by the viewer's 1000 m far plane.
+- 2000×953 hotel photograph → 1,176,739 valid SHARP Gaussians, 37.65 MB `.splat`, a measured 66.12° horizontal field of view, and an 8.1 cm/s nearby-motion speed derived from SHARP's official disparity envelope.
+- 570×428 painting in Artwork + Detail → low-denoise 1065×800 enlargement in 4.0 seconds without using a cloud API. The Photo treatment was separately A/B tested and is intentionally stronger.
+
 - 1280×720 room image → 1,177,956 valid SHARP Gaussians, 37.7 MB `.splat`, about 21 seconds including cold model load.
 - 512×512 room image in Detail → conservative 1024×1024 restoration, 1,173,868 valid SHARP Gaussians, 37.56 MB `.splat`, 20.6 seconds through the live REST/WebSocket workflow. Learned wall axes up to 0.855 m are preserved rather than clipped into holes.
 - 1347×447 cropped panorama → 3,791,059 valid merged Gaussians, 121.3 MB `.splat`, about 56 seconds with four horizon faces. The merged field is normalized to a 4 m median radius for useful bounded parallax.
@@ -89,7 +95,7 @@ On the development RTX 4080 Laptop GPU:
 
 The Library supports per-scene deletion, multi-select, Select all, and exact reclaimed-space reporting. World Labs request/response handling is covered by a mocked contract test, so verification does not spend API credits.
 
-The optional HD renderer was browser-tested against a real local `.splat`: its adaptive shader linked without console errors and increased a 1164×807 Standard framebuffer to 1374×952 while keeping the same viewport and scene data.
+Spark 2.1 was browser-tested against the exact Monet, hotel, and 6.8-million-Gaussian generated-360 outputs. The direct scenes render without the previous dark point lattice; the generated 360 still exposes the blur and cubeface disagreement already present in the diffusion output.
 
 Run the same live API smoke test with:
 
@@ -99,7 +105,7 @@ python backend\test_pipeline.py --backend http://127.0.0.1:8000
 
 ## Architecture
 
-FastAPI owns inference and streams progress over WebSockets. Next.js owns creation, library, settings, and the immersive viewer. `gsplat.js` rasterizes the final 32-byte-per-Gaussian `.splat` records in WebGL.
+FastAPI owns inference and streams progress over WebSockets. Next.js owns creation, library, settings, and the immersive viewer. World Labs Spark 2.1 rasterizes the final 32-byte-per-Gaussian `.splat` records in WebGL2.
 
 See [CURRENT_PRODUCT.md](CURRENT_PRODUCT.md) for product scope, [TechnicalArchitecture.md](TechnicalArchitecture.md) for the exact pipeline, and [HACKATHON_SUBMISSION.md](HACKATHON_SUBMISSION.md) for submission wording.
 
@@ -110,6 +116,6 @@ See [CURRENT_PRODUCT.md](CURRENT_PRODUCT.md) for product scope, [TechnicalArchit
 - [CubeDiff paper](https://arxiv.org/abs/2501.17162) and [OpenCubeDiff implementation](https://github.com/Juan5713/OpenCubeDiff)
 - [PanoDreamer layered panorama reconstruction](https://github.com/avinashpaliwal/PanoDreamer)
 - [Mip-Splatting anti-aliasing analysis](https://www.cvlibs.net/publications/Yu2024CVPR.pdf)
-- [`gsplat` rasterization documentation](https://docs.gsplat.studio/main/apis/rasterization.html)
+- [World Labs Spark renderer](https://github.com/sparkjsdev/spark) and [system design](https://sparkjs.dev/docs/system-design/)
 - [Scene4U, CVPR 2025](https://openaccess.thecvf.com/content/CVPR2025/papers/Huang_Scene4U_Hierarchical_Layered_3D_Scene_Reconstruction_from_Single_Panoramic_Image_CVPR_2025_paper.pdf)
 - [Depth Anything 3](https://github.com/ByteDance-Seed/Depth-Anything-3)

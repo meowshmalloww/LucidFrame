@@ -70,6 +70,45 @@ def _linear_to_srgb(colors: np.ndarray) -> np.ndarray:
     ).astype(np.float32)
 
 
+def _repair_source_color_outliers(
+    positions: np.ndarray,
+    colors: np.ndarray,
+    source_rgb: np.ndarray,
+    focal_px: float,
+) -> int:
+    """Correct only severe dark colors that contradict the measured source.
+
+    Paintings and clipped skies occasionally produce near-black SHARP colors
+    even though their projected source pixels are bright.  The geometry stays
+    learned; this pass only restores measured color for those clear outliers.
+    """
+    height, width = source_rgb.shape[:2]
+    z = np.maximum(positions[:, 2], 1e-6)
+    sample_x = np.rint(positions[:, 0] / z * focal_px + width / 2.0).astype(np.int64)
+    sample_y = np.rint(positions[:, 1] / z * focal_px + height / 2.0).astype(np.int64)
+    inside = (
+        (sample_x >= 0)
+        & (sample_x < width)
+        & (sample_y >= 0)
+        & (sample_y < height)
+    )
+    indices = np.flatnonzero(inside)
+    if len(indices) == 0:
+        return 0
+
+    reference = source_rgb[sample_y[indices], sample_x[indices]].astype(np.float32) / 255.0
+    predicted = colors[indices]
+    luma = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
+    reference_luma = reference @ luma
+    predicted_luma = predicted @ luma
+    difference = np.linalg.norm(reference - predicted, axis=1)
+    outlier = (reference_luma > 0.68) & (predicted_luma < 0.20) & (difference > 0.55)
+    repaired_indices = indices[outlier]
+    if len(repaired_indices):
+        colors[repaired_indices] = reference[outlier] * 0.9 + colors[repaired_indices] * 0.1
+    return int(len(repaired_indices))
+
+
 def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
     """Predict a metric 3DGS scene from one image using SHARP."""
     if not is_available():
@@ -111,6 +150,22 @@ def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
     colors = colors[valid].astype(np.float32)
     opacities = opacities[valid].astype(np.float32)
 
+    from PIL import Image
+
+    with Image.open(image_path) as source_image:
+        source_rgb = np.asarray(
+            source_image.convert("RGB").resize(
+                (int(image.shape[1]), int(image.shape[0])),
+                Image.Resampling.LANCZOS,
+            )
+        )
+    repaired_color_count = _repair_source_color_outliers(
+        positions,
+        colors,
+        source_rgb,
+        float(focal_px),
+    )
+
     result = GaussianData(
         positions=positions,
         scales=np.log(singular_values).astype(np.float32),
@@ -118,10 +173,10 @@ def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
         colors=colors,
         opacities=opacities,
     )
-
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     linear_scales = singular_values.reshape(-1)
+    depth_percentiles = np.quantile(positions[:, 2], [0.001, 0.1, 0.5, 0.999])
     report = {
         "backend": "Apple SHARP",
         "license": "Apple Machine Learning Research Model License (non-commercial research)",
@@ -130,7 +185,11 @@ def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
         "focal_px": round(float(focal_px), 3),
         "gaussian_count": result.count,
         "filtered_count": int(len(valid) - valid.sum()),
+        "source_color_repairs": repaired_color_count,
         "median_depth_m": round(float(np.median(positions[:, 2])), 5),
+        "depth_percentiles_m": [
+            round(float(value), 5) for value in depth_percentiles
+        ],
         "scale_percentiles": [
             round(float(value), 7)
             for value in np.quantile(linear_scales, [0.01, 0.5, 0.99])
@@ -162,7 +221,7 @@ def gaussian_data_from_ply(path: str | Path, *, y_up: bool) -> GaussianData:
     opacities = (1.0 / (1.0 + np.exp(-np.clip(opacity_logits, -30.0, 30.0))))[:, None]
 
     if y_up:
-        # Reflect both centres and covariance bases into gsplat.js camera axes:
+        # Reflect both centres and covariance bases into browser camera axes:
         # X right, Y down, Z forward.  M*R is a reflection, so a second axis
         # flip F restores a proper rotation without changing the covariance.
         positions[:, 1] *= -1.0

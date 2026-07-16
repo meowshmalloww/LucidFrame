@@ -17,7 +17,7 @@ import re
 import shutil
 import uuid
 from contextlib import asynccontextmanager
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from dotenv import load_dotenv
@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from progress import ProgressBroadcaster
 from resource_monitor import get_health, check_all
+from scene_camera import load_scene_camera
 
 # ── Setup ───────────────────────────────────────────────────────────────────
 
@@ -127,7 +128,8 @@ async def gallery():
         # project-based instead of showing duplicate cards with the same ID.
         if f.parent != OUTPUTS_DIR and f.name != "final.splat" and (f.parent / "final.splat").exists():
             continue
-        job_id = f.parent.name if f.parent != OUTPUTS_DIR else f.stem
+        project_relative = f.parent.relative_to(OUTPUTS_DIR)
+        job_id = project_relative.as_posix() if f.parent != OUTPUTS_DIR else f.stem
         manifest_path = f.parent / "world_manifest.json"
         manifest: dict[str, Any] = {}
         if manifest_path.exists():
@@ -135,15 +137,16 @@ async def gallery():
                 manifest = json.loads(manifest_path.read_text())
             except (OSError, json.JSONDecodeError):
                 manifest = {}
-        source_path = UPLOADS_DIR / job_id / "input.png"
+        source_path = UPLOADS_DIR.joinpath(*PurePosixPath(job_id).parts) / "input.png"
         splats.append({
             "id": job_id,
-            "name": str(manifest.get("source_name") or job_id),
+            "name": str(manifest.get("source_name") or (f.parent.name if f.parent != OUTPUTS_DIR else f.stem)),
             "url": f"/outputs/{relative.as_posix()}",
             "source_url": f"/uploads/{job_id}/input.png" if source_path.exists() else None,
             "size_kb": round(f.stat().st_size / 1024, 1),
             "provider": str(manifest.get("provider") or "local"),
             "coverage": manifest.get("coverage"),
+            "camera": manifest.get("camera") or load_scene_camera(f.parent),
             "created_at": f.stat().st_mtime,
         })
     splats.sort(key=lambda item: item["created_at"], reverse=True)
@@ -151,14 +154,34 @@ async def gallery():
 
 
 def _project_directory(root: Path, job_id: str) -> Path:
-    """Resolve one project directory without allowing path traversal."""
-    if not _SAFE_JOB_ID.fullmatch(job_id):
+    """Resolve a project directory, including legacy nested output groups."""
+    relative = PurePosixPath(job_id.replace("\\", "/"))
+    if relative.is_absolute() or not relative.parts or any(
+        part in {"", ".", ".."} or not _SAFE_JOB_ID.fullmatch(part)
+        for part in relative.parts
+    ):
         raise HTTPException(status_code=422, detail=f"Invalid scene id: {job_id!r}")
     resolved_root = root.resolve()
-    candidate = (resolved_root / job_id).resolve()
-    if candidate.parent != resolved_root:
+    candidate = resolved_root.joinpath(*relative.parts).resolve()
+    if candidate == resolved_root or resolved_root not in candidate.parents:
         raise HTTPException(status_code=422, detail="Scene id escaped the storage directory.")
     return candidate
+
+
+@app.get("/api/scenes/{job_id}")
+async def scene_metadata(job_id: str):
+    """Return renderer metadata for one generated scene."""
+    output_dir = _project_directory(OUTPUTS_DIR, job_id)
+    manifest_path = output_dir / "world_manifest.json"
+    if not output_dir.is_dir() or not manifest_path.is_file():
+        raise HTTPException(status_code=404, detail="Scene metadata was not found.")
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=500, detail="Scene metadata is unreadable.") from exc
+    if not manifest.get("camera"):
+        manifest["camera"] = load_scene_camera(output_dir)
+    return manifest
 
 
 def _directory_size(path: Path) -> int:
@@ -174,25 +197,38 @@ def _delete_gallery_projects(ids: list[str]) -> dict[str, Any]:
     for job_id in dict.fromkeys(ids):
         output_dir = _project_directory(OUTPUTS_DIR, job_id)
         upload_dir = _project_directory(UPLOADS_DIR, job_id)
-        standalone_splat = (OUTPUTS_DIR.resolve() / f"{job_id}.splat").resolve()
-        if standalone_splat.parent != OUTPUTS_DIR.resolve():
-            raise HTTPException(status_code=422, detail="Scene id escaped the storage directory.")
-        existed = output_dir.exists() or upload_dir.exists() or standalone_splat.is_file()
+        relative = PurePosixPath(job_id.replace("\\", "/"))
+        standalone_splat = OUTPUTS_DIR.resolve() / f"{job_id}.splat" if len(relative.parts) == 1 else None
+        existed = output_dir.exists() or upload_dir.exists() or bool(standalone_splat and standalone_splat.is_file())
         if not existed:
             missing.append(job_id)
             continue
         freed_bytes += _directory_size(output_dir) + _directory_size(upload_dir)
-        if standalone_splat.is_file():
+        if standalone_splat and standalone_splat.is_file():
             freed_bytes += standalone_splat.stat().st_size
         if output_dir.exists():
             shutil.rmtree(output_dir)
         if upload_dir.exists():
             shutil.rmtree(upload_dir)
-        if standalone_splat.is_file():
+        if standalone_splat and standalone_splat.is_file():
             standalone_splat.unlink()
+        _prune_empty_parents(output_dir.parent, OUTPUTS_DIR)
+        _prune_empty_parents(upload_dir.parent, UPLOADS_DIR)
         JOBS.pop(job_id, None)
         deleted.append(job_id)
     return {"deleted": deleted, "missing": missing, "freed_bytes": freed_bytes}
+
+
+def _prune_empty_parents(start: Path, root: Path) -> None:
+    """Remove empty legacy grouping folders without crossing the storage root."""
+    resolved_root = root.resolve()
+    current = start.resolve()
+    while current != resolved_root and resolved_root in current.parents:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
 
 
 @app.delete("/api/gallery/{job_id}")
@@ -284,6 +320,7 @@ async def generate_world(
     provider: str = Form("local"),
     creative_direction: str = Form(""),
     quality_profile: str = Form("balanced"),
+    source_profile: str = Form("artwork"),
 ):
     """
     Upload an image and start the LucidFrame pipeline.
@@ -295,6 +332,9 @@ async def generate_world(
     quality_profile = quality_profile.lower().strip()
     if quality_profile not in {"balanced", "detail"}:
         raise HTTPException(status_code=422, detail="Unknown reconstruction quality profile.")
+    source_profile = source_profile.lower().strip()
+    if source_profile not in {"artwork", "photo"}:
+        raise HTTPException(status_code=422, detail="Unknown source treatment.")
     if provider == "local_world":
         from cubediff_stage import is_available as cubediff_available
 
@@ -328,11 +368,13 @@ async def generate_world(
         from PIL import Image
         import io
         pil_img = Image.open(io.BytesIO(raw_bytes))
+        from image_metadata import preserved_image_metadata
+        save_metadata = preserved_image_metadata(pil_img)
         if pil_img.mode not in ("RGB", "RGBA"):
             pil_img = pil_img.convert("RGB")
         image_size = pil_img.size
         image_path = job_dir / "input.png"
-        pil_img.save(str(image_path), "PNG")
+        pil_img.save(str(image_path), "PNG", **save_metadata)
         logger.info("Normalized uploaded image %s (%s mode=%s) → PNG", image.filename, ext, pil_img.mode)
     except Exception as pil_exc:
         # Try optional HEIC/HEIF decoder if the extension suggests it
@@ -345,11 +387,13 @@ async def generate_world(
                 pillow_heif.register_heif_opener()
                 pillow_heif.register_avif_opener()
                 pil_img = Image.open(io.BytesIO(raw_bytes))
+                from image_metadata import preserved_image_metadata
+                save_metadata = preserved_image_metadata(pil_img)
                 if pil_img.mode not in ("RGB", "RGBA"):
                     pil_img = pil_img.convert("RGB")
                 image_size = pil_img.size
                 image_path = job_dir / "input.png"
-                pil_img.save(str(image_path), "PNG")
+                pil_img.save(str(image_path), "PNG", **save_metadata)
                 logger.info("Normalized HEIC/HEIF image %s → PNG", image.filename)
             except ImportError:
                 logger.error("HEIC/HEIF upload rejected: install pillow-heif (pip install pillow-heif)")
@@ -387,11 +431,16 @@ async def generate_world(
         "creative_direction": creative_direction.strip()[:240],
         "worldlabs_model": worldlabs_model,
         "quality_profile": quality_profile,
+        "source_profile": source_profile,
         "source_name": Path(image.filename or "Untitled").stem[:100],
     }
 
     logger.info("Created %s job %s for image %s", provider, job_id, image.filename)
-    return {"job_id": job_id, "provider": provider}
+    return {
+        "job_id": job_id,
+        "provider": provider,
+        "source_url": f"/uploads/{job_id}/input.png",
+    }
 
 
 # ── WebSocket Pipeline ──────────────────────────────────────────────────────
@@ -479,7 +528,10 @@ async def _run_pipeline(
             from image_restoration_stage import restore_for_reconstruction
 
             image_path, restoration_report = await asyncio.to_thread(
-                restore_for_reconstruction, image_path, output_dir
+                restore_for_reconstruction,
+                image_path,
+                output_dir,
+                str(job.get("source_profile") or "artwork"),
             )
             await progress.stage_done("restoration", restoration_report)
         except Exception as exc:
@@ -669,7 +721,9 @@ async def _run_pipeline(
         "multiview_enabled": multiview_enabled,
         "difix_mode": difix_mode,
         "quality_profile": job.get("quality_profile", "balanced"),
+        "source_profile": job.get("source_profile", "artwork"),
         "source_restoration": restoration_report,
+        "camera": load_scene_camera(output_dir),
     }
     (output_dir / "world_manifest.json").write_text(json.dumps(manifest, indent=2))
     await progress.stage_done("compile", {"splat_url": splat_url, **manifest})
@@ -694,7 +748,10 @@ async def _run_local_world_pipeline(
             from image_restoration_stage import restore_for_reconstruction
 
             image_path, restoration_report = await asyncio.to_thread(
-                restore_for_reconstruction, image_path, output_dir
+                restore_for_reconstruction,
+                image_path,
+                output_dir,
+                str(job.get("source_profile") or "artwork"),
             )
         except Exception as exc:
             logger.warning("Source restoration failed for generated world %s: %s", job_id, exc)
@@ -729,6 +786,29 @@ async def _run_local_world_pipeline(
         )
     finally:
         await asyncio.to_thread(unload_cubediff)
+    panorama_restoration: dict[str, Any] = {
+        "applied": False,
+        "reason": "balanced profile",
+    }
+    if quality_profile == "detail":
+        await progress.stage_progress(
+            "multiview",
+            "Restoring the generated sphere with a wrap-aware tiled pass...",
+        )
+        try:
+            from image_restoration_stage import enhance_generated_panorama
+
+            panorama_path, panorama_restoration = await asyncio.to_thread(
+                enhance_generated_panorama,
+                panorama_path,
+                output_dir,
+                str(job.get("source_profile") or "artwork"),
+                2560,
+            )
+        except Exception as exc:
+            logger.warning("Generated panorama restoration failed for %s: %s", job_id, exc)
+            panorama_restoration = {"applied": False, "reason": str(exc)}
+            await progress.warning("multiview", f"Panorama restoration was skipped: {exc}")
     await progress.stage_done(
         "multiview",
         {
@@ -736,6 +816,7 @@ async def _run_local_world_pipeline(
             "panorama_resolution": panorama_report.get("panorama_resolution"),
             "elapsed_sec": panorama_report.get("elapsed_sec"),
             "coverage": "generated full sphere",
+            "restoration": panorama_restoration,
         },
     )
 
@@ -822,10 +903,12 @@ async def _run_local_world_pipeline(
         "coverage": "generated full 360 sphere: front, back, left, right, ceiling, and floor",
         "artistic_contract": "The uploaded front direction is observed. Every unseen direction and every occluded surface is a generated artistic hypothesis, not recovered ground truth.",
         "translation_note": "Overlapping SHARP fields support nearby movement in every direction. Large translation can still expose surfaces absent from a single camera center.",
-        "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward for gsplat.js",
+        "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward browser camera coordinates",
         "quality_profile": quality_profile,
+        "source_profile": job.get("source_profile", "artwork"),
         "source_restoration": restoration_report,
         "generation_report": panorama_report,
+        "panorama_restoration": panorama_restoration,
     }
     (output_dir / "world_manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
@@ -906,7 +989,7 @@ async def _run_local_panorama_pipeline(
         "coverage": "horizontal 360 coverage for full/cropped panoramas; best-effort extension for partial panoramas",
         "artistic_contract": "One panorama observes one camera center. SHARP predicts local geometry, but hidden surfaces behind foreground objects are not measured.",
         "translation_note": "Viewer free-flight is unrestricted. Raw local Gaussians do not include a collision mesh.",
-        "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward for gsplat.js",
+        "orientation": "Y-up depth alignment exported as X-right, Y-down, Z-forward browser camera coordinates",
         "quality_profile": job.get("quality_profile", "balanced"),
     }
     (output_dir / "world_manifest.json").write_text(json.dumps(manifest, indent=2))

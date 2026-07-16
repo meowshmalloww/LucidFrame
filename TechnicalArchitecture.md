@@ -4,7 +4,7 @@ This document describes the code that currently runs. It supersedes the earlier 
 
 ## Runtime
 
-- Frontend: Next.js 15, React 19, TypeScript, `gsplat.js`
+- Frontend: Next.js 15, React 19, TypeScript, Three.js, World Labs Spark 2.1
 - Backend: FastAPI, Python 3.11, PyTorch/CUDA
 - Tested GPU: RTX 4080 Laptop GPU, 12 GB VRAM
 - Transport: multipart upload, REST job creation, WebSocket progress, static `.splat` delivery
@@ -16,7 +16,7 @@ This document describes the code that currently runs. It supersedes the earlier 
 3. Invalid, behind-camera, and extremely transparent predictions are removed.
 4. Linear color is converted to sRGB; WXYZ quaternion orientation is preserved.
 5. The compiler writes positions, learned scales, RGBA, and rotations to `.splat`.
-6. The viewer starts at the source camera center and permits look-around plus a bounded 35 cm translation volume.
+6. The viewer starts at the measured source camera, uses SHARP's focal length, and scales free-flight speed to the official nearby-view disparity envelope. There is no invisible collision boundary; the interface warns that short movements preserve the strongest view.
 
 This is nearby-view synthesis. It cannot reconstruct the back side of an object or a room behind the camera.
 
@@ -32,7 +32,7 @@ This is nearby-view synthesis. It cannot reconstruct the back side of an object 
 5. Each face is scale/shift aligned to the shared panorama disparity and merged by SPAG4D.
 6. PLY coordinates are reflected from Y-up into the browser's X-right/Y-down/Z-forward convention, including covariance orientation.
 7. Invalid, low-opacity, and extreme-radius outliers are removed. The merged scene is normalized to a 4 m median radius so a 48 cm translation creates useful parallax.
-8. The compiler keeps learned anisotropic scales up to 10 cm instead of clipping all support at the old 5 cm ceiling.
+8. The compiler keeps learned anisotropic scales up to 2 m so distant walls, skies, and broad painting support are not clipped into holes.
 
 The old continuous spherical depth lift remains an automatic fallback. Its manifest says `aligned_depth_fallback`; it is never labeled SHARP-360.
 
@@ -46,6 +46,10 @@ The old continuous spherical depth lift remains an automatic fallback. Its manif
 6. The manifest records the source direction as observed and all unseen directions as generated. If SHARP-360 is unavailable, the named `aligned_depth_fallback` remains available without being mislabeled.
 
 This mode fills angular space around the camera. It materially improves turning and modest movement in every direction, but it does not make deeply occluded geometry factual or guarantee unlimited translation.
+
+## Browser renderer
+
+Spark loads the same local `.splat` binary with no hosted rendering service. LucidFrame uses radial ordering for rotation stability, the documented `0.3` pre-blur for scenes learned without an anti-aliasing covariance term, and a 1000 m far plane for direct metric SHARP scenes. Standard renders to CSS-pixel resolution at √8σ Gaussian extent; HD uses bounded device-pixel supersampling and 3σ extent. Neither setting invents missing surfaces.
 
 ## Binary format
 
@@ -72,7 +76,7 @@ Only one large model is retained at a time. Image-to-360 generation unloads Cube
 - `SHARP360_SIDE_COUNT=auto` (Balanced 4; Detail 6 overlapping horizon views)
 - `SHARP360_INCLUDE_CAPS=auto`
 - `SHARP360_TARGET_RADIUS=4.0`
-- `SPLAT_MAX_SCALE=1.00` (outlier guard; smaller values can cut holes into SHARP wall splats)
+- `SPLAT_MAX_SCALE=2.00` (outlier guard; smaller values can cut holes into SHARP wall and distant-background splats)
 
 Every successful output records a manifest and model-specific JSON quality report. A failed quality backend falls back transparently or fails the job; demo media is disabled by default.
 

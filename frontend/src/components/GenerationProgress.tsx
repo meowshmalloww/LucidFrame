@@ -6,42 +6,59 @@ import type { PipelineState } from "@/lib/usePipeline";
 
 const STEP_COPY: Record<PipelineStage, { title: string; detail: string }> = {
   restoration: {
-    title: "Preparing image",
-    detail: "Checking the source and restoring small images when needed.",
+    title: "Preparing the source",
+    detail: "Preserving the image texture and enlarging it only when the input needs it.",
   },
   vlm: {
-    title: "Reading image",
-    detail: "Finding the layout, lighting, and main objects in the source.",
+    title: "Reading the composition",
+    detail: "Locating the horizon, important forms, and the structure that can be inferred from the source.",
   },
   llm: {
-    title: "Planning scene",
-    detail: "Preparing a consistent direction for the reconstruction.",
+    title: "Setting the scene",
+    detail: "Keeping the reconstruction grounded in the uploaded image.",
   },
   multiview: {
-    title: "Building views",
-    detail: "Preparing the views needed to cover the scene.",
+    title: "Extending the view",
+    detail: "Preparing the directions needed by the selected reconstruction method.",
   },
   reconstruction: {
-    title: "Creating geometry",
-    detail: "Predicting depth and placing Gaussian points. This is usually the longest step.",
+    title: "Building the 3D scene",
+    detail: "Predicting depth and placing the Gaussian representation. This is usually the longest part.",
   },
   stitch: {
-    title: "Joining scene",
-    detail: "Aligning overlapping views and checking their coverage.",
+    title: "Checking coverage",
+    detail: "Aligning overlapping regions and checking the scene for open seams.",
   },
   difix: {
-    title: "Cleaning details",
-    detail: "Reducing visible artifacts before the scene is saved.",
+    title: "Cleaning the result",
+    detail: "Running the final artifact checks before export.",
   },
   compile: {
-    title: "Finishing",
-    detail: "Writing the scene file and preparing it for the browser.",
+    title: "Saving the scene",
+    detail: "Writing the splat file and preparing it for the viewer.",
   },
-  system: { title: "Preparing", detail: "Starting the local generation process." },
-  pipeline: { title: "Preparing", detail: "Starting the local generation process." },
+  system: { title: "Starting", detail: "Preparing the local generation process." },
+  pipeline: { title: "Starting", detail: "Preparing the local generation process." },
 };
 
-export function GenerationProgress({ state }: { state: PipelineState }) {
+const PHASES: Array<{ label: string; stages: PipelineStage[] }> = [
+  { label: "Source", stages: ["restoration", "vlm", "llm"] },
+  { label: "Views", stages: ["multiview"] },
+  { label: "Geometry", stages: ["reconstruction", "stitch", "difix"] },
+  { label: "Scene", stages: ["compile"] },
+];
+
+type Provider = "local" | "local_world" | "local_pano" | "worldlabs";
+
+export function GenerationProgress({
+  state,
+  sourcePreview,
+  provider,
+}: {
+  state: PipelineState;
+  sourcePreview: string | null;
+  provider: Provider;
+}) {
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
@@ -55,67 +72,115 @@ export function GenerationProgress({ state }: { state: PipelineState }) {
     const active = STAGE_ORDER.find((stage) => state.stages[stage] === "active")
       || STAGE_ORDER.find((stage) => state.stages[stage] === "pending")
       || "compile";
-    const activeIndex = Math.max(0, STAGE_ORDER.indexOf(active));
-    const percent = Math.min(100, Math.round(((completed + (state.stages[active] === "active" ? 0.45 : 0)) / STAGE_ORDER.length) * 100));
-    return { active, activeIndex, completed, percent };
+    const percent = Math.round((completed / STAGE_ORDER.length) * 100);
+    return { active, completed, percent };
   }, [state.stages]);
 
   const copy = STEP_COPY[progress.active];
-  const recentMessages = state.logs
-    .filter((log) => log.message)
-    .slice(-4)
-    .reverse();
+  const currentMessage = [...state.logs].reverse().find((log) => log.message)?.message;
 
   return (
-    <div className="absolute inset-3 z-30 overflow-auto rounded-[10px] border border-[#cbc9bf] bg-[#f7f6f0] p-4 text-[#1b1b18] sm:inset-4 sm:p-6" aria-busy="true">
-      <div className="mx-auto grid min-h-full w-full max-w-[1050px] items-center gap-7 lg:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="generation-preview relative aspect-[16/11] min-h-[280px] overflow-hidden rounded-[8px] border border-[#cfcdc4] bg-[#dfddd5]" aria-hidden>
-          <div className="absolute inset-x-[8%] bottom-[12%] h-[38%] border border-[#c5c2b8] bg-[#e9e7df]" />
-          <div className="absolute left-[13%] top-[17%] h-[42%] w-[28%] border border-[#c7c4ba] bg-[#ebe9e2]" />
-          <div className="absolute right-[12%] top-[12%] h-[50%] w-[34%] border border-[#c7c4ba] bg-[#e5e3db]" />
-          <div className="skeleton-sweep absolute inset-0" />
+    <section
+      className="absolute inset-3 z-30 overflow-auto rounded-[10px] border border-[#cbc9bf] bg-[#f7f6f0] text-[#1b1b18] sm:inset-4"
+      aria-busy="true"
+      aria-labelledby="generation-title"
+    >
+      <div className="grid min-h-full lg:grid-cols-[minmax(320px,0.92fr)_minmax(390px,1.08fr)]">
+        <div className="relative min-h-[300px] overflow-hidden border-b border-[#d3d0c7] bg-[#dedbd2] lg:min-h-full lg:border-b-0 lg:border-r">
+          {sourcePreview ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element -- source is served by the local FastAPI process. */}
+              <img src={sourcePreview} alt="" className="absolute inset-0 h-full w-full scale-110 object-cover opacity-20 blur-2xl" aria-hidden />
+              <div className="absolute inset-0 bg-[#25241f]/10" aria-hidden />
+              <div className="absolute inset-7 grid place-items-center sm:inset-10">
+                {/* eslint-disable-next-line @next/next/no-img-element -- source is served by the local FastAPI process. */}
+                <img src={sourcePreview} alt="Uploaded source" className="max-h-full max-w-full border border-black/10 bg-[#f3f1e8] object-contain shadow-[0_22px_60px_rgba(32,30,24,0.22)]" />
+              </div>
+            </>
+          ) : (
+            <div className="grid h-full place-items-center p-10 text-center text-[#77766f]">
+              <SourceIcon />
+            </div>
+          )}
         </div>
 
-        <section aria-labelledby="generation-title">
-          <p className="text-sm font-medium text-[#686760]">Creating your scene</p>
-          <h2 id="generation-title" className="mt-2 text-3xl font-medium tracking-[-0.035em]">{copy.title}</h2>
-          <p className="mt-3 text-sm leading-6 text-[#686760]">{copy.detail}</p>
+        <div className="flex min-h-[420px] flex-col justify-between p-6 sm:p-9 lg:p-11">
+          <div>
+            <div className="flex items-center justify-between gap-4 text-xs text-[#686760]">
+              <span>{methodLabel(provider)}</span>
+              <span>{formatTime(elapsed)}</span>
+            </div>
 
-          <div className="mt-7">
+            <div className="py-12 sm:py-16">
+              <h2 id="generation-title" className="max-w-xl text-[clamp(2rem,3.7vw,3.25rem)] font-medium leading-[1.02] tracking-[-0.045em]">
+                {copy.title}
+              </h2>
+              <p className="mt-5 max-h-16 max-w-lg overflow-hidden text-sm leading-6 text-[#686760]">
+                {currentMessage || copy.detail}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-3 flex items-center justify-between text-xs text-[#686760]">
+              <span>Progress</span>
+              <span>{progress.percent}%</span>
+            </div>
             <div
               role="progressbar"
               aria-label="Scene generation progress"
               aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={progress.percent}
-              className="h-1.5 overflow-hidden bg-[#d9d6cd]"
+              aria-valuemax={STAGE_ORDER.length}
+              aria-valuenow={progress.completed}
+              aria-valuetext={`${copy.title}. ${progress.completed} of ${STAGE_ORDER.length} tasks complete.`}
+              className="h-1 overflow-hidden bg-[#d9d6cd]"
             >
               <div className="h-full bg-[#315c4a] transition-[width] duration-500 ease-out" style={{ width: `${progress.percent}%` }} />
             </div>
-            <div className="mt-3 flex items-center justify-between text-xs text-[#77766f]">
-              <span>Step {Math.min(progress.activeIndex + 1, STAGE_ORDER.length)} of {STAGE_ORDER.length}</span>
-              <span>{formatTime(elapsed)}</span>
-            </div>
+            <ol className="mt-4 flex flex-wrap gap-x-5 gap-y-2" aria-label="Generation phases">
+              {PHASES.map((phase) => {
+                const status = phaseStatus(phase.stages, state);
+                return (
+                  <li key={phase.label} className={status === "pending" ? "text-[11px] text-[#9a9890]" : status === "active" ? "text-[11px] font-semibold text-[#315c4a]" : "text-[11px] font-medium text-[#4f4e48]"}>
+                    {phase.label}
+                  </li>
+                );
+              })}
+            </ol>
           </div>
-
-          <details className="mt-7 border-t border-[#d5d3ca] pt-4 text-xs text-[#686760]">
-            <summary className="cursor-pointer font-medium text-[#4f4e48]">Processing details</summary>
-            <div className="mt-3 space-y-2 leading-5">
-              {recentMessages.length > 0
-                ? recentMessages.map((log) => <p key={log.id}>{log.message}</p>)
-                : <p>The local process is starting.</p>}
-            </div>
-          </details>
-        </section>
+        </div>
       </div>
-      <span className="sr-only" role="status">{copy.title}. {copy.detail}</span>
-    </div>
+      <span className="sr-only" role="status" aria-live="polite">{copy.title}. {copy.detail}</span>
+    </section>
+  );
+}
+
+function phaseStatus(stages: PipelineStage[], state: PipelineState): "pending" | "active" | "done" {
+  if (stages.every((stage) => state.stages[stage] === "done")) return "done";
+  if (stages.some((stage) => state.stages[stage] === "active" || state.stages[stage] === "done")) return "active";
+  return "pending";
+}
+
+function methodLabel(provider: Provider) {
+  if (provider === "local_world") return "Image to 360";
+  if (provider === "local_pano") return "Panorama to 360";
+  if (provider === "worldlabs") return "World Labs";
+  return "Image to 3D";
+}
+
+function SourceIcon() {
+  return (
+    <svg viewBox="0 0 48 48" className="h-12 w-12 fill-none stroke-current stroke-[1.2]" aria-hidden>
+      <rect x="6" y="8" width="36" height="30" rx="2" />
+      <path d="m10 33 10-11 8 8 5-5 5 8" />
+      <circle cx="16" cy="16" r="2.5" />
+    </svg>
   );
 }
 
 function formatTime(seconds: number) {
-  if (seconds < 60) return `${seconds}s elapsed`;
+  if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
-  return `${minutes}m ${remainder.toString().padStart(2, "0")}s elapsed`;
+  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
 }

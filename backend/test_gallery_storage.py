@@ -47,3 +47,33 @@ def test_gallery_delete_removes_legacy_standalone_splat(tmp_path, monkeypatch) -
 
     assert result == {"deleted": ["old-room"], "missing": [], "freed_bytes": 64}
     assert not legacy.exists()
+
+
+def test_gallery_delete_removes_nested_legacy_project(tmp_path, monkeypatch) -> None:
+    outputs = tmp_path / "outputs"
+    uploads = tmp_path / "uploads"
+    project = outputs / "artwork-sharp-ab" / "photo"
+    project.mkdir(parents=True)
+    uploads.mkdir()
+    (project / "final.splat").write_bytes(b"s" * 96)
+    monkeypatch.setattr(main, "OUTPUTS_DIR", outputs)
+    monkeypatch.setattr(main, "UPLOADS_DIR", uploads)
+
+    result = main._delete_gallery_projects(["artwork-sharp-ab/photo"])
+
+    assert result == {
+        "deleted": ["artwork-sharp-ab/photo"],
+        "missing": [],
+        "freed_bytes": 96,
+    }
+    assert not project.exists()
+    assert not (outputs / "artwork-sharp-ab").exists()
+
+
+@pytest.mark.parametrize("scene_id", ["../outside", "group/../../outside", "/outside", "group\\..\\outside"])
+def test_nested_gallery_delete_rejects_traversal(tmp_path, monkeypatch, scene_id) -> None:
+    monkeypatch.setattr(main, "OUTPUTS_DIR", tmp_path / "outputs")
+    monkeypatch.setattr(main, "UPLOADS_DIR", tmp_path / "uploads")
+    with pytest.raises(HTTPException) as caught:
+        main._delete_gallery_projects([scene_id])
+    assert caught.value.status_code == 422

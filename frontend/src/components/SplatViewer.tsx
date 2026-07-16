@@ -8,7 +8,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { SPLAT_URL_BASE } from "@/lib/api";
+import type {
+  PerspectiveCamera,
+  Quaternion,
+  Scene,
+  Vector3,
+  WebGLRenderer,
+} from "three";
+import type { SparkRenderer, SplatMesh } from "@sparkjsdev/spark";
+import { SPLAT_URL_BASE, type SceneCameraMetadata } from "@/lib/api";
 
 export interface SplatViewerHandle {
   resetCamera: () => void;
@@ -24,56 +32,59 @@ interface SplatViewerProps {
   mode: "orbit" | "fps";
   sceneMode?: "image" | "panorama";
   renderQuality?: SplatRenderQuality;
-  onModeChange?: (mode: "orbit" | "fps") => void;
+  cameraCalibration?: SceneCameraMetadata | null;
 }
+
+type ThreeModule = typeof import("three");
 
 type Control = {
   update: () => void;
   dispose: () => void;
-  setCameraTarget?: (target: unknown) => void;
-  moveSpeed?: number;
-  lookSpeed?: number;
 };
 
-type AdaptiveRenderProgram = {
-  setCovariancePadding: (value: number) => void;
+type SparkEngine = {
+  scene: Scene;
+  camera: PerspectiveCamera;
+  renderer: WebGLRenderer;
+  spark: SparkRenderer;
+  splat: SplatMesh;
+  controls: Control;
+  THREE: ThreeModule;
+  initialCameraPos: Vector3;
+  initialCameraRot: Quaternion;
+  sceneMode: "image" | "panorama";
+  cameraCalibration: SceneCameraMetadata | null;
+  disposing: boolean;
 };
 
 const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
-  ({ splatUrl, className = "", mode, sceneMode = "image", renderQuality = "standard" }, ref) => {
+  ({ splatUrl, className = "", mode, sceneMode = "image", renderQuality = "standard", cameraCalibration = null }, ref) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    const engineRef = useRef<{
-      scene: any;
-      camera: any;
-      renderer: any;
-      controls: Control;
-      SPLAT: any;
-      initialCameraPos: any;
-      initialCameraRot: any;
-      sceneMode: "image" | "panorama";
-      adaptiveRenderProgram: AdaptiveRenderProgram | null;
-    } | null>(null);
+    const engineRef = useRef<SparkEngine | null>(null);
     const modeRef = useRef(mode);
     modeRef.current = mode;
     const renderQualityRef = useRef(renderQuality);
     renderQualityRef.current = renderQuality;
+    const cameraCalibrationRef = useRef(cameraCalibration);
+    cameraCalibrationRef.current = cameraCalibration;
     const [showHint, setShowHint] = useState(true);
     const [isLoading, setIsLoading] = useState(false);
     const [loadProgress, setLoadProgress] = useState(0);
     const [loadError, setLoadError] = useState<string | null>(null);
 
-    const makeControls = useCallback((engine: NonNullable<typeof engineRef.current>, nextMode: "orbit" | "fps") => {
+    const makeControls = useCallback((engine: SparkEngine, nextMode: "orbit" | "fps") => {
       if (nextMode === "fps") {
         return createFreeFlyControls(
           engine.camera,
-          engine.renderer.canvas,
-          engine.SPLAT,
+          engine.renderer.domElement,
+          engine.THREE,
+          engine.cameraCalibration?.move_speed_mps,
         );
       }
       return createLookControls(
         engine.camera,
-        engine.renderer.canvas,
-        engine.SPLAT,
+        engine.renderer.domElement,
+        engine.THREE,
         engine.sceneMode,
       );
     }, []);
@@ -83,8 +94,10 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
 
       let cancelled = false;
       let animationId: number | null = null;
-      let renderer: any;
-      let controls: Control | null = null;
+      let engine: SparkEngine | null = null;
+      let pendingRenderer: WebGLRenderer | null = null;
+      let pendingSpark: SparkRenderer | null = null;
+      let pendingSplat: SplatMesh | null = null;
 
       setLoadError(null);
       setIsLoading(true);
@@ -92,43 +105,98 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
 
       (async () => {
         try {
-          const SPLAT = await import("gsplat");
+          const [THREE, sparkModule] = await Promise.all([
+            import("three"),
+            import("@sparkjsdev/spark"),
+          ]);
           if (cancelled || !canvasRef.current) return;
 
-          const scene = new SPLAT.Scene();
-          const camera = new SPLAT.Camera();
-          renderer = new SPLAT.WebGLRenderer(canvasRef.current);
-          const adaptiveRenderProgram = installAdaptiveRenderProgram(SPLAT, renderer);
-          adaptiveRenderProgram?.setCovariancePadding(covariancePadding(renderQualityRef.current));
-          canvasRef.current.dataset.renderQuality = renderQualityRef.current;
-          canvasRef.current.dataset.adaptiveRenderer = adaptiveRenderProgram ? "available" : "fallback";
-          const fullUrl = splatUrl.startsWith("http") ? splatUrl : SPLAT_URL_BASE + splatUrl;
+          const scene = new THREE.Scene();
+          const camera = new THREE.PerspectiveCamera(60, 1, 0.01, sceneMode === "image" ? 1000 : 250);
+          // SHARP exports OpenCV camera coordinates: +x right, +y down, +z
+          // forward. Looking along +z with a -y up vector preserves the source
+          // photograph without mirroring or rotating the learned Gaussians.
+          camera.up.set(0, -1, 0);
+          camera.position.set(0, 0, 0);
+          pointCamera(camera, THREE, 0, 0);
 
-          await SPLAT.Loader.LoadAsync(fullUrl, scene, (progress: number) => {
-            if (!cancelled) setLoadProgress(progress);
+          const renderer = new THREE.WebGLRenderer({
+            canvas: canvasRef.current,
+            antialias: false,
+            alpha: false,
+            premultipliedAlpha: true,
+            powerPreference: "high-performance",
           });
+          pendingRenderer = renderer;
+          renderer.setClearColor(0x1f1f1c, 1);
+          renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+          const spark = new sparkModule.SparkRenderer({
+            renderer,
+            // Radial ordering is more stable while the viewer rotates. A small
+            // pre-filter follows Spark's recommendation for splats learned
+            // without an anti-aliasing covariance term.
+            sortRadial: true,
+            preBlurAmount: 0.3,
+            maxStdDev: gaussianExtent(renderQualityRef.current),
+            minAlpha: 0.5 / 255,
+            // A panoramic scene can contain several million splats. Keep every
+            // splat in the draw, but avoid immediately starting another full
+            // worker sort after the previous one finishes. Radial ordering
+            // remains stable between sorts while the render loop stays live.
+            minSortIntervalMs: sceneMode === "panorama" ? 80 : 20,
+            enableLod: false,
+          });
+          pendingSpark = spark;
+          scene.add(spark);
+
+          const fullUrl = splatUrl.startsWith("http") ? splatUrl : SPLAT_URL_BASE + splatUrl;
+          const splat = new sparkModule.SplatMesh({
+            url: fullUrl,
+            nonLod: true,
+            onProgress: (event: ProgressEvent) => {
+              if (cancelled) return;
+              if (event.lengthComputable && event.total > 0) {
+                setLoadProgress(Math.min(event.loaded / event.total, 0.98));
+              }
+            },
+          });
+          pendingSplat = splat;
+          scene.add(splat);
+          await splat.initialized;
+
           if (cancelled) {
+            splat.dispose();
+            spark.dispose();
             renderer.dispose();
+            pendingSplat = null;
+            pendingSpark = null;
+            pendingRenderer = null;
             return;
           }
 
-          camera.position = new SPLAT.Vector3(0, 0, 0);
-          camera.rotation = SPLAT.Quaternion.FromEuler(new SPLAT.Vector3(0, 0, 0));
-
-          const engine = {
+          const nextEngine: SparkEngine = {
             scene,
             camera,
             renderer,
-            controls: { update: () => {}, dispose: () => {} } as Control,
-            SPLAT,
+            spark,
+            splat,
+            controls: { update: () => {}, dispose: () => {} },
+            THREE,
             initialCameraPos: camera.position.clone(),
-            initialCameraRot: camera.rotation.clone(),
+            initialCameraRot: camera.quaternion.clone(),
             sceneMode,
-            adaptiveRenderProgram,
+            cameraCalibration: cameraCalibrationRef.current,
+            disposing: false,
           };
-          controls = makeControls(engine, modeRef.current);
-          engine.controls = controls;
-          engineRef.current = engine;
+          nextEngine.controls = makeControls(nextEngine, modeRef.current);
+          engine = nextEngine;
+          pendingSplat = null;
+          pendingSpark = null;
+          pendingRenderer = null;
+          engineRef.current = nextEngine;
+          updateCanvasDiagnostics(canvasRef.current, renderQualityRef.current, sceneMode, cameraCalibrationRef.current);
+          setLoadProgress(1);
           setIsLoading(false);
           setShowHint(true);
 
@@ -136,25 +204,23 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
             const current = engineRef.current;
             if (!current) return;
             current.controls.update();
-            resizeRendererForDisplay(current.renderer, renderQualityRef.current);
-            const cameraPosition = current.camera.position;
-            const translation = Math.hypot(
-              Number(cameraPosition.x) || 0,
-              Number(cameraPosition.y) || 0,
-              Number(cameraPosition.z) || 0,
+            resizeRendererForDisplay(current.renderer, current.camera, renderQualityRef.current);
+            current.spark.maxStdDev = gaussianExtent(renderQualityRef.current);
+            setCameraHorizontalFov(
+              current.camera,
+              current.cameraCalibration?.horizontal_fov_deg || (current.sceneMode === "panorama" ? 78 : 62),
             );
-            current.adaptiveRenderProgram?.setCovariancePadding(
-              covariancePadding(renderQualityRef.current, translation),
-            );
-            // SHARP estimates a perspective camera close to a 60–65° horizontal
-            // field of view for ordinary photos. Matching that view fills the
-            // frame without exposing unsupported border Gaussians.
-            setCameraFov(current.camera, current.sceneMode === "panorama" ? 78 : 62);
             current.renderer.render(current.scene, current.camera);
             animationId = requestAnimationFrame(frame);
           };
           frame();
         } catch (caught) {
+          pendingSplat?.dispose();
+          pendingSpark?.dispose();
+          pendingRenderer?.dispose();
+          pendingSplat = null;
+          pendingSpark = null;
+          pendingRenderer = null;
           if (!cancelled) {
             setIsLoading(false);
             setLoadError(caught instanceof Error ? caught.message : "The .splat scene could not be opened.");
@@ -165,9 +231,9 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
       return () => {
         cancelled = true;
         if (animationId !== null) cancelAnimationFrame(animationId);
-        controls?.dispose();
-        renderer?.dispose();
+        const current = engine || engineRef.current;
         engineRef.current = null;
+        if (current) void disposeSparkEngineWhenIdle(current);
       };
     }, [makeControls, sceneMode, splatUrl]);
 
@@ -180,29 +246,36 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
     }, [isLoading, makeControls, mode]);
 
     useEffect(() => {
-      if (canvasRef.current) canvasRef.current.dataset.renderQuality = renderQuality;
+      if (canvasRef.current) {
+        updateCanvasDiagnostics(canvasRef.current, renderQuality, sceneMode, cameraCalibration);
+      }
+      const engine = engineRef.current;
+      if (engine) engine.spark.maxStdDev = gaussianExtent(renderQuality);
+    }, [cameraCalibration, renderQuality, sceneMode]);
+
+    useEffect(() => {
       const engine = engineRef.current;
       if (!engine) return;
-      engine.adaptiveRenderProgram?.setCovariancePadding(covariancePadding(renderQuality));
-    }, [renderQuality]);
+      engine.cameraCalibration = cameraCalibration;
+      if (modeRef.current === "fps") {
+        engine.controls.dispose();
+        engine.controls = makeControls(engine, "fps");
+      }
+    }, [cameraCalibration, makeControls]);
 
     useImperativeHandle(ref, () => ({
       resetCamera: () => {
         const engine = engineRef.current;
         if (!engine) return;
         engine.controls.dispose();
-        engine.camera.position = engine.initialCameraPos.clone();
-        engine.camera.rotation = engine.initialCameraRot.clone();
+        engine.camera.position.copy(engine.initialCameraPos);
+        engine.camera.quaternion.copy(engine.initialCameraRot);
         engine.controls = makeControls(engine, mode);
         setShowHint(true);
       },
       setFov: (fov: number) => {
         const engine = engineRef.current;
-        if (!engine) return;
-        const width = engine.camera.data.width || 800;
-        const focal = (width / 2) / Math.tan((fov * Math.PI) / 360);
-        engine.camera.data.fx = focal;
-        engine.camera.data.fy = focal;
+        if (engine) setCameraHorizontalFov(engine.camera, fov);
       },
       getCamera: () => engineRef.current?.camera,
     }), [makeControls, mode]);
@@ -219,7 +292,7 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
     }
 
     const hint = mode === "fps"
-      ? "Drag to look. Use WASD to move, Q/E for height, and Shift to move faster."
+      ? "Drag to look. Use WASD to move, Q/E for height, and Shift to move faster. Short movements preserve the clearest view."
       : "Drag to look around.";
 
     return (
@@ -236,7 +309,7 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
           <div className="absolute inset-0 z-20 grid place-items-center bg-[#1f1f1c] text-white">
             <div className="w-64">
               <div className="flex items-center justify-between text-xs">
-                <span>Loading Gaussian scene</span>
+                <span>Preparing Gaussian scene</span>
                 <span>{Math.round(loadProgress * 100)}%</span>
               </div>
               <div className="mt-3 h-1 overflow-hidden bg-white/15">
@@ -270,14 +343,14 @@ const SplatViewer = forwardRef<SplatViewerHandle, SplatViewerProps>(
 );
 
 function createLookControls(
-  camera: any,
+  camera: PerspectiveCamera,
   canvas: HTMLCanvasElement,
-  SPLAT: any,
+  THREE: ThreeModule,
   sceneMode: "image" | "panorama",
 ): Control {
-  const initial = camera.rotation.toEuler();
-  let pitch = initial.x;
-  let yaw = initial.y;
+  const angles = cameraAngles(camera, THREE);
+  let pitch = angles.pitch;
+  let yaw = angles.yaw;
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
@@ -302,7 +375,7 @@ function createLookControls(
     }
     lastX = event.clientX;
     lastY = event.clientY;
-    camera.rotation = SPLAT.Quaternion.FromEuler(new SPLAT.Vector3(pitch, yaw, 0));
+    pointCamera(camera, THREE, pitch, yaw);
   };
   const up = (event: PointerEvent) => {
     dragging = false;
@@ -329,22 +402,20 @@ function createLookControls(
 }
 
 function createFreeFlyControls(
-  camera: any,
+  camera: PerspectiveCamera,
   canvas: HTMLCanvasElement,
-  SPLAT: any,
+  THREE: ThreeModule,
+  calibratedMoveSpeed = 0.12,
 ): Control {
-  const initial = camera.rotation.toEuler();
-  let pitch = initial.x;
-  let yaw = initial.y;
+  const angles = cameraAngles(camera, THREE);
+  let pitch = angles.pitch;
+  let yaw = angles.yaw;
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
   let lastFrame = performance.now();
   const pressed = new Set<string>();
 
-  const updateRotation = () => {
-    camera.rotation = SPLAT.Quaternion.FromEuler(new SPLAT.Vector3(pitch, yaw, 0));
-  };
   const down = (event: PointerEvent) => {
     if (event.button !== 0) return;
     dragging = true;
@@ -357,13 +428,10 @@ function createFreeFlyControls(
     if (!dragging) return;
     yaw -= (event.clientX - lastX) * 0.004;
     pitch -= (event.clientY - lastY) * 0.004;
-    // Explore mode is deliberately free-flight. A local Gaussian scene has no
-    // collision mesh, so restricting the camera behind an invisible radius is
-    // more confusing than exposing the model's evidence boundary honestly.
     pitch = Math.max(-1.48, Math.min(1.48, pitch));
     lastX = event.clientX;
     lastY = event.clientY;
-    updateRotation();
+    pointCamera(camera, THREE, pitch, yaw);
   };
   const up = (event: PointerEvent) => {
     dragging = false;
@@ -401,17 +469,14 @@ function createFreeFlyControls(
       if (forward === 0 && right === 0 && vertical === 0) return;
       const length = Math.hypot(forward, right, vertical) || 1;
       const sprinting = pressed.has("ShiftLeft") || pressed.has("ShiftRight");
-      const distance = delta * (sprinting ? 2.1 : 0.7);
+      const distance = delta * calibratedMoveSpeed * 1.45 * (sprinting ? 2 : 1);
       const forwardX = Math.sin(yaw);
       const forwardZ = Math.cos(yaw);
       const rightX = Math.cos(yaw);
       const rightZ = -Math.sin(yaw);
-      const position = camera.position;
-      camera.position = new SPLAT.Vector3(
-        position.x + ((forward * forwardX + right * rightX) / length) * distance,
-        position.y - (vertical / length) * distance,
-        position.z + ((forward * forwardZ + right * rightZ) / length) * distance,
-      );
+      camera.position.x += ((forward * forwardX + right * rightX) / length) * distance;
+      camera.position.y -= (vertical / length) * distance;
+      camera.position.z += ((forward * forwardZ + right * rightZ) / length) * distance;
     },
     dispose: () => {
       canvas.removeEventListener("pointerdown", down);
@@ -423,102 +488,104 @@ function createFreeFlyControls(
       window.removeEventListener("blur", blur);
       canvas.style.cursor = "";
       pressed.clear();
-
     },
   };
 }
 
-function setCameraFov(camera: any, fov: number) {
-  const width = camera.data.width || 800;
-  const focal = (width / 2) / Math.tan((fov * Math.PI) / 360);
-  camera.data.fx = focal;
-  camera.data.fy = focal;
+function cameraAngles(camera: PerspectiveCamera, THREE: ThreeModule) {
+  const direction = camera.getWorldDirection(new THREE.Vector3());
+  return {
+    pitch: Math.asin(Math.max(-1, Math.min(1, direction.y))),
+    yaw: Math.atan2(direction.x, direction.z),
+  };
 }
 
-function resizeRendererForDisplay(renderer: any, quality: SplatRenderQuality) {
-  const canvas = renderer.canvas as HTMLCanvasElement;
-  // Standard preserves gsplat.js's original CSS-pixel drawing buffer exactly.
-  // HD allocates a bounded high-DPI buffer while preserving the CSS layout.
-  // It is presentation-only supersampling: the learned scene stays untouched
-  // and the user can disable it instantly if a device cannot sustain it.
+function pointCamera(camera: PerspectiveCamera, THREE: ThreeModule, pitch: number, yaw: number) {
+  const cosPitch = Math.cos(pitch);
+  const target = new THREE.Vector3(
+    camera.position.x + Math.sin(yaw) * cosPitch,
+    camera.position.y + Math.sin(pitch),
+    camera.position.z + Math.cos(yaw) * cosPitch,
+  );
+  camera.lookAt(target);
+}
+
+function setCameraHorizontalFov(camera: PerspectiveCamera, horizontalFov: number) {
+  const aspect = Math.max(camera.aspect || 1, 1e-6);
+  const horizontalRadians = (horizontalFov * Math.PI) / 180;
+  camera.fov = (2 * Math.atan(Math.tan(horizontalRadians / 2) / aspect) * 180) / Math.PI;
+  camera.updateProjectionMatrix();
+}
+
+function resizeRendererForDisplay(renderer: WebGLRenderer, camera: PerspectiveCamera, quality: SplatRenderQuality) {
+  const canvas = renderer.domElement as HTMLCanvasElement;
   const pixelRatio = quality === "high"
     ? Math.min((window.devicePixelRatio || 1) * 1.18, 2)
     : 1;
-  const width = Math.max(1, Math.round(canvas.clientWidth * pixelRatio));
-  const height = Math.max(1, Math.round(canvas.clientHeight * pixelRatio));
-  if (canvas.width !== width || canvas.height !== height) {
-    renderer.setSize(width, height);
+  const width = Math.max(1, Math.round(canvas.clientWidth));
+  const height = Math.max(1, Math.round(canvas.clientHeight));
+  const drawingWidth = Math.max(1, Math.round(width * pixelRatio));
+  const drawingHeight = Math.max(1, Math.round(height * pixelRatio));
+  if (
+    renderer.getPixelRatio() !== pixelRatio ||
+    canvas.width !== drawingWidth ||
+    canvas.height !== drawingHeight
+  ) {
+    renderer.setPixelRatio(pixelRatio);
+    renderer.setSize(width, height, false);
   }
+  const aspect = width / height;
+  if (camera.aspect !== aspect) camera.aspect = aspect;
 }
 
-function covariancePadding(quality: SplatRenderQuality, cameraTranslation = 0) {
-  // gsplat.js 1.2.9 and the reference 3DGS rasterizer use 0.3 px². The HD
-  // option raises this only slightly; larger values noticeably dilate edges.
-  const base = quality === "high" ? 0.45 : 0.3;
-  const ceiling = quality === "high" ? 0.72 : 0.60;
-  return Math.min(ceiling, base + Math.max(0, cameraTranslation) * 0.12);
+function gaussianExtent(quality: SplatRenderQuality) {
+  return quality === "high" ? 3 : Math.sqrt(8);
 }
 
-function installAdaptiveRenderProgram(SPLAT: typeof import("gsplat"), renderer: any): AdaptiveRenderProgram | null {
-  try {
-    class LucidFrameRenderProgram extends SPLAT.RenderProgram {
-      protected override _getVertexSource(): string {
-        let source = super._getVertexSource();
-        source = source.replace(
-          "uniform vec2 viewport;",
-          "uniform vec2 viewport;\nuniform float lucidframeCovariancePadding;",
-        );
-        source = source.replace(
-          /cov2d\[0\]\[0\]\s*\+=\s*0\.3;/,
-          [
-            "float lucidframeBaselineDeterminant = max((cov2d[0][0] + 0.3) * (cov2d[1][1] + 0.3) - cov2d[0][1] * cov2d[0][1], 1e-8);",
-            "cov2d[0][0] += lucidframeCovariancePadding;",
-          ].join("\n"),
-        );
-        source = source.replace(
-          /cov2d\[1\]\[1\]\s*\+=\s*0\.3;/,
-          [
-            "cov2d[1][1] += lucidframeCovariancePadding;",
-            "float lucidframeFilteredDeterminant = max(cov2d[0][0] * cov2d[1][1] - cov2d[0][1] * cov2d[0][1], 1e-8);",
-            "float lucidframeOpacityCompensation = sqrt(clamp(lucidframeBaselineDeterminant / lucidframeFilteredDeterminant, 0.0, 1.0));",
-          ].join("\n"),
-        );
-        source = source.replace(
-          "vColor = colorTransform * color;",
-          "vColor = colorTransform * color;\nvColor.a *= lucidframeOpacityCompensation;",
-        );
-        const covarianceWasReplaced =
-          source.includes("cov2d[0][0] += lucidframeCovariancePadding;") &&
-          source.includes("cov2d[1][1] += lucidframeCovariancePadding;");
-        const opacityWasCompensated = source.includes("vColor.a *= lucidframeOpacityCompensation;");
-        if (!source.includes("uniform float lucidframeCovariancePadding;") || !covarianceWasReplaced || !opacityWasCompensated) {
-          throw new Error("The installed gsplat.js shader no longer matches the HD renderer adapter.");
-        }
-        return source;
-      }
+function updateCanvasDiagnostics(
+  canvas: HTMLCanvasElement,
+  quality: SplatRenderQuality,
+  sceneMode: "image" | "panorama",
+  calibration: SceneCameraMetadata | null,
+) {
+  canvas.dataset.renderQuality = quality;
+  canvas.dataset.adaptiveRenderer = "spark-2.1";
+  canvas.dataset.cameraFov = String(calibration?.horizontal_fov_deg || (sceneMode === "panorama" ? 78 : 62));
+  canvas.dataset.moveSpeed = String((calibration?.move_speed_mps || 0.12) * 1.45);
+}
 
-      setCovariancePadding(value: number) {
-        const gl = this.renderer.gl;
-        gl.useProgram(this.program);
-        const location = gl.getUniformLocation(this.program, "lucidframeCovariancePadding");
-        if (location !== null) gl.uniform1f(location, value);
-      }
-    }
+async function disposeSparkEngineWhenIdle(engine: SparkEngine) {
+  if (engine.disposing) return;
+  engine.disposing = true;
 
-    const baseline = renderer.renderProgram;
-    const program = new LucidFrameRenderProgram(renderer, baseline.passes);
-    const gl = renderer.gl as WebGL2RenderingContext;
-    if (!gl.getProgramParameter(program.program, gl.LINK_STATUS)) {
-      gl.deleteProgram(program.program);
-      throw new Error("The HD Gaussian shader did not link on this WebGL device.");
-    }
-    renderer.removeProgram(baseline);
-    renderer.addProgram(program);
-    return program;
-  } catch (caught) {
-    console.warn("LucidFrame HD rendering is unavailable; using the original gsplat.js program.", caught);
-    return null;
+  const { spark } = engine;
+  engine.controls.dispose();
+  spark.autoUpdate = false;
+  spark.sortDirty = false;
+  spark.lodDirty = false;
+
+  if (spark.updateTimeoutId !== -1) {
+    window.clearTimeout(spark.updateTimeoutId);
+    spark.updateTimeoutId = -1;
   }
+  if (spark.sortTimeoutId !== -1) {
+    window.clearTimeout(spark.sortTimeoutId);
+    spark.sortTimeoutId = -1;
+  }
+
+  // Spark 2.1 rejects an in-flight worker request if dispose() terminates the
+  // sorter. It can also dispose the GPU readback target while driveSort() is
+  // still using it. Detach the scene now, then release its resources only once
+  // that final sort has naturally completed.
+  engine.scene.remove(engine.splat);
+  engine.scene.remove(spark);
+  while (spark.sorting) {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
+  }
+
+  spark.dispose();
+  engine.splat.dispose();
+  engine.renderer.dispose();
 }
 
 SplatViewer.displayName = "SplatViewer";
