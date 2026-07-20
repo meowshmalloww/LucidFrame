@@ -109,6 +109,24 @@ def _repair_source_color_outliers(
     return int(len(repaired_indices))
 
 
+def _load_oriented_source_rgb(
+    image_path: str | Path,
+    width: int,
+    height: int,
+) -> np.ndarray:
+    """Load the measured RGB pixels in the same EXIF orientation as SHARP."""
+    from PIL import Image, ImageOps
+
+    with Image.open(image_path) as source_image:
+        oriented = ImageOps.exif_transpose(source_image)
+        return np.asarray(
+            oriented.convert("RGB").resize(
+                (width, height),
+                Image.Resampling.LANCZOS,
+            )
+        )
+
+
 def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
     """Predict a metric 3DGS scene from one image using SHARP."""
     if not is_available():
@@ -150,15 +168,11 @@ def reconstruct_sharp(image_path: str | Path, output_dir: Path) -> GaussianData:
     colors = colors[valid].astype(np.float32)
     opacities = opacities[valid].astype(np.float32)
 
-    from PIL import Image
-
-    with Image.open(image_path) as source_image:
-        source_rgb = np.asarray(
-            source_image.convert("RGB").resize(
-                (int(image.shape[1]), int(image.shape[0])),
-                Image.Resampling.LANCZOS,
-            )
-        )
+    source_rgb = _load_oriented_source_rgb(
+        image_path,
+        int(image.shape[1]),
+        int(image.shape[0]),
+    )
     repaired_color_count = _repair_source_color_outliers(
         positions,
         colors,

@@ -9,6 +9,7 @@ from cubediff_stage import prepare_conditioning_image
 from panorama_spherical_stage import PanoramaValidationError, validate_panorama
 from reconstruction_stage import GaussianData
 from sharp_wrapper import (
+    _load_oriented_source_rgb,
     _matrices_to_wxyz,
     _repair_source_color_outliers,
     _wxyz_to_matrices,
@@ -61,6 +62,26 @@ def test_splat_compiler_preserves_valid_sharp_scales(tmp_path, monkeypatch) -> N
     np.testing.assert_allclose(records["pos_scale"][0, 3:], learned_scales[0], rtol=1e-6)
     np.testing.assert_allclose(records["pos_scale"][1, 3:], learned_scales[1], rtol=1e-6)
     np.testing.assert_allclose(records["pos_scale"][2, 3:], learned_scales[2], rtol=1e-6)
+
+
+def test_sharp_source_color_uses_the_same_exif_orientation_as_inference(tmp_path) -> None:
+    pixels = np.array(
+        [
+            [[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+            [[255, 255, 0], [0, 255, 255], [255, 0, 255]],
+        ],
+        dtype=np.uint8,
+    )
+    source = Image.fromarray(pixels)
+    exif = Image.Exif()
+    exif[274] = 6
+    path = tmp_path / "portrait.png"
+    source.save(path, exif=exif)
+
+    oriented = _load_oriented_source_rgb(path, 2, 3)
+
+    expected = np.rot90(pixels, k=3)
+    np.testing.assert_array_equal(oriented, expected)
 
 
 def test_sharp_camera_metadata_preserves_lens_and_scales_nearby_motion() -> None:

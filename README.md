@@ -78,3 +78,10 @@ LucidFrame/
 - [SPAG4D](https://github.com/cedarconnor/SPAG4d)
 - [CubeDiff](https://arxiv.org/abs/2501.17162)
 - [World Labs Spark](https://github.com/sparkjsdev/spark)
+
+## StructureFirst
+
+StructureFirst reuses only LucidFrame's reconstruction functions: Apple SHARP
+for photos, SHARP-360 for panoramas, and the `.splat` compiler. It does not reuse
+LucidFrame's interface. Multi-photo room alignment is handled by StructureFirst
+before the connected Gaussian scene is compiled.
